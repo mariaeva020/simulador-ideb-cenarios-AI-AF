@@ -38,11 +38,16 @@ import plotly.express as px
 # ============================================================
 
 st.set_page_config(
-    page_title="Simulador de Cenários do IDEB",
-    layout="wide"
+    page_title="Simulador de Cenários do IDEB - AI-AF",
+    page_icon="📘",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+col_logo1, col_logo2, col_logo3 = st.columns([1, 6, 1])
 
+with col_logo2:
+    st.image("assets/logo_simulador_ideb.png", use_container_width=True)
 # ============================================================
 # CONSTANTES DO PROJETO
 # ============================================================

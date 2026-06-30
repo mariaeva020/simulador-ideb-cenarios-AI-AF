@@ -4,27 +4,22 @@
 #
 # Objetivo:
 # Esta aplicação permite simular cenários hipotéticos para o IDEB
-# municipal dos Anos Iniciais e dos Anos Finais do Ensino Fundamental.
-#
-# A aplicação utiliza modelos XGBoost previamente treinados e salvos
-# pelo script "treinar_modelos.py".
-#
-# Escopo:
-# 1. Anos Iniciais do Ensino Fundamental
-# 2. Anos Finais do Ensino Fundamental
+# municipal a partir do artefato final do modelo selecionado no artigo.
 #
 # Observação metodológica:
-# Os resultados não devem ser interpretados como previsão futura nem
-# como efeito causal. A aplicação realiza análise de sensibilidade
-# baseada em alterações hipotéticas nas variáveis explicativas.
-# ============================================================
-
-
-# ============================================================
-# IMPORTAÇÃO DAS BIBLIOTECAS
+# O simulador não realiza previsão futura nem inferência causal.
+# Os resultados representam simulações condicionais do modelo, obtidas
+# por análise de sensibilidade sobre os registros observados de 2023.
+#
+# Modelo:
+# O modelo é carregado a partir do artefato final gerado no notebook
+# metodológico do artigo. Esse artefato deve conter o modelo final,
+# as variáveis selecionadas, o imputador, o seletor de variância e as
+# métricas utilizadas na avaliação.
 # ============================================================
 
 import os
+import re
 import joblib
 
 import numpy as np
@@ -38,69 +33,49 @@ import plotly.express as px
 # ============================================================
 
 st.set_page_config(
-    page_title="Simulador de Cenários do IDEB - AI-AF",
+    page_title="Simulador de Cenários do IDEB",
     page_icon="📘",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-col_logo1, col_logo2, col_logo3 = st.columns([1, 6, 1])
 
-with col_logo2:
-    st.image("assets/logo_simulador_ideb.png", use_container_width=True)
 # ============================================================
 # CONSTANTES DO PROJETO
 # ============================================================
 
-# Pasta onde estão as bases de dados.
 PASTA_DADOS = "data"
-
-# Pasta onde estão os modelos treinados.
 PASTA_MODELOS = "models"
+PASTA_ASSETS = "assets"
 
-# Variáveis utilizadas no modelo final.
-VARIAVEIS_MODELO = [
-    "PIB per capita",
-    "taxa_distorcao_idade_serie",
-    "Grupo 5-adeq form docente",
-    "Área plantada ou destinada à colheita -lavour",
-    "Valor da produção na extração vegetal",
-    "Valor repassado-Criança Feliz"
-]
-
-# Caminhos das bases de dados.
-CAMINHOS_BASES = {
-    "Anos Iniciais": os.path.join(PASTA_DADOS, "base_anos_iniciais.xlsx"),
-    "Anos Finais": os.path.join(PASTA_DADOS, "base_anos_finais.xlsx")
-}
-
-# Caminhos dos modelos treinados.
-CAMINHOS_MODELOS = {
-    "Anos Iniciais": os.path.join(PASTA_MODELOS, "modelo_xgb_anos_iniciais.pkl"),
-    "Anos Finais": os.path.join(PASTA_MODELOS, "modelo_xgb_anos_finais.pkl")
-}
-
-# Caminhos das métricas salvas.
-CAMINHOS_METRICAS = {
-    "Anos Iniciais": os.path.join(PASTA_MODELOS, "metricas_anos_iniciais.pkl"),
-    "Anos Finais": os.path.join(PASTA_MODELOS, "metricas_anos_finais.pkl")
+# A aplicação procura, para cada etapa, um artefato final exportado pelo notebook.
+# Para Anos Iniciais, também aceita o nome genérico artefato_modelo_final_ideb.pkl.
+CONFIG_ETAPAS = {
+    "Anos Iniciais": {
+        "base": os.path.join(PASTA_DADOS, "base_anos_iniciais.xlsx"),
+        "artefatos_possiveis": [
+            os.path.join(PASTA_MODELOS, "artefato_modelo_final_anos_iniciais.pkl"),
+            os.path.join(PASTA_MODELOS, "artefato_modelo_final_ideb.pkl")
+        ]
+    },
+    "Anos Finais": {
+        "base": os.path.join(PASTA_DADOS, "base_anos_finais.xlsx"),
+        "artefatos_possiveis": [
+            os.path.join(PASTA_MODELOS, "artefato_modelo_final_anos_finais.pkl")
+        ]
+    }
 }
 
 
 # ============================================================
-# ESTILO VISUAL DA APLICAÇÃO
-# ============================================================
-#
-# O CSS abaixo define uma identidade visual mais limpa, com fundo
-# claro, cards brancos, título em azul escuro e componentes com
-# cantos arredondados.
+# ESTILO VISUAL
 # ============================================================
 
 st.markdown(
     """
     <style>
     .block-container {
-        padding-top: 2rem;
+        padding-top: 1.6rem;
         padding-bottom: 2rem;
     }
 
@@ -127,14 +102,6 @@ st.markdown(
         margin-bottom: 1.5rem;
     }
 
-    .card-metrica {
-        background-color: #FFFFFF;
-        padding: 1rem;
-        border-radius: 16px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-        border: 1px solid #E5E7EB;
-    }
-
     .texto-pequeno {
         color: #6B7280;
         font-size: 0.9rem;
@@ -146,26 +113,93 @@ st.markdown(
 
 
 # ============================================================
-# FUNÇÃO DE LEITURA E TRATAMENTO DAS BASES
+# FUNÇÕES AUXILIARES GERAIS
+# ============================================================
+
+def formatar_numero(valor, casas: int = 4) -> str:
+    """Formata números no padrão brasileiro."""
+    try:
+        if pd.isna(valor):
+            return "Não disponível"
+        return f"{float(valor):.{casas}f}".replace(".", ",")
+    except Exception:
+        return str(valor)
+
+
+def nome_variavel_texto(nome: str) -> str:
+    """
+    Converte o nome técnico da variável em texto mais legível para a interface.
+    Exemplo: taxa_distorcao_idade_serie -> Taxa distorcao idade serie.
+    """
+    texto = str(nome)
+    texto = texto.replace("_", " ")
+    texto = texto.replace("-", " - ")
+    texto = re.sub(r"\s+", " ", texto).strip()
+    if not texto:
+        return str(nome)
+    return texto[:1].upper() + texto[1:]
+
+
+def obter_coluna_existente(df: pd.DataFrame, candidatas: list[str]) -> str | None:
+    """Retorna a primeira coluna existente entre as candidatas informadas."""
+    for coluna in candidatas:
+        if coluna in df.columns:
+            return coluna
+    return None
+
+
+def obter_coluna_municipio(df: pd.DataFrame) -> str:
+    """Identifica a coluna de município na base."""
+    possiveis_colunas = [
+        "nome_do_municipio",
+        "nome_municipio",
+        "Nome do Município",
+        "Município",
+        "municipio",
+        "Nome Município"
+    ]
+
+    coluna = obter_coluna_existente(df, possiveis_colunas)
+
+    if coluna is not None:
+        return coluna
+
+    df["Município"] = [f"Município {i + 1}" for i in range(df.shape[0])]
+    return "Município"
+
+
+def localizar_artefato(caminhos_possiveis: list[str]) -> str | None:
+    """Localiza o primeiro artefato existente entre os caminhos possíveis."""
+    for caminho in caminhos_possiveis:
+        if os.path.exists(caminho):
+            return caminho
+    return None
+
+
+def detectar_etapas_disponiveis() -> dict:
+    """Retorna apenas as etapas que possuem base e artefato disponíveis."""
+    etapas = {}
+
+    for etapa, config in CONFIG_ETAPAS.items():
+        caminho_base = config["base"]
+        caminho_artefato = localizar_artefato(config["artefatos_possiveis"])
+
+        if os.path.exists(caminho_base) and caminho_artefato is not None:
+            etapas[etapa] = {
+                "base": caminho_base,
+                "artefato": caminho_artefato
+            }
+
+    return etapas
+
+
+# ============================================================
+# FUNÇÕES DE CARREGAMENTO
 # ============================================================
 
 @st.cache_data
 def carregar_base(caminho_arquivo: str) -> pd.DataFrame:
-    """
-    Carrega e trata a base de dados usada na aplicação.
-
-    Parâmetros
-    ----------
-    caminho_arquivo : str
-        Caminho do arquivo Excel.
-
-    Retorno
-    -------
-    pd.DataFrame
-        Base tratada.
-    """
-
-    # Verifica se a base existe no caminho esperado.
+    """Carrega a base em Excel sem refazer o pré-processamento do treinamento."""
     if not os.path.exists(caminho_arquivo):
         st.error(
             f"A base de dados não foi encontrada em: {caminho_arquivo}. "
@@ -173,325 +207,158 @@ def carregar_base(caminho_arquivo: str) -> pd.DataFrame:
         )
         st.stop()
 
-    # Lê a base em Excel.
-    df = pd.read_excel(caminho_arquivo)
+    return pd.read_excel(caminho_arquivo)
 
-    # Remove colunas SAEB específicas que não são utilizadas no modelo.
-    colunas_remover = [
-        "Nota SAEB em Matemática",
-        "Nota SAEB em Língua Portuguesa"
+
+@st.cache_resource
+def carregar_artefato(caminho_artefato: str) -> dict:
+    """Carrega o artefato final do modelo selecionado no artigo."""
+    if not os.path.exists(caminho_artefato):
+        st.error(
+            f"O artefato do modelo não foi encontrado em: {caminho_artefato}. "
+            "Exporte o artefato final do notebook metodológico para a pasta 'models'."
+        )
+        st.stop()
+
+    artefato = joblib.load(caminho_artefato)
+
+    chaves_obrigatorias = [
+        "modelo_final",
+        "variaveis_modelo",
+        "imputador",
+        "seletor_variancia",
+        "variaveis_originais_X",
+        "variaveis_pos_variancia"
     ]
 
-    df.drop(
-        columns=[col for col in colunas_remover if col in df.columns],
-        inplace=True,
-        errors="ignore"
+    chaves_ausentes = [chave for chave in chaves_obrigatorias if chave not in artefato]
+
+    if chaves_ausentes:
+        st.error(
+            "O artefato carregado não contém todas as informações necessárias. "
+            "Chaves ausentes: " + ", ".join(chaves_ausentes)
+        )
+        st.stop()
+
+    return artefato
+
+
+# ============================================================
+# FUNÇÕES DE PRÉ-PROCESSAMENTO E PREDIÇÃO
+# ============================================================
+
+def preparar_entrada_modelo(dados: pd.DataFrame, artefato: dict) -> pd.DataFrame:
+    """
+    Reaplica o mesmo pré-processamento usado no treinamento:
+    seleção das variáveis originais, imputação, remoção de variância zero
+    e seleção das variáveis finais do modelo.
+    """
+    dados = dados.copy()
+
+    variaveis_originais = artefato["variaveis_originais_X"]
+    variaveis_pos_variancia = artefato["variaveis_pos_variancia"]
+    variaveis_modelo = artefato["variaveis_modelo"]
+    imputador = artefato["imputador"]
+    seletor_variancia = artefato["seletor_variancia"]
+
+    for variavel in variaveis_originais:
+        if variavel not in dados.columns:
+            dados[variavel] = np.nan
+
+    X_original = dados[variaveis_originais].copy()
+    X_original = X_original.apply(pd.to_numeric, errors="coerce")
+
+    X_imp_array = imputador.transform(X_original)
+    X_imp = pd.DataFrame(
+        X_imp_array,
+        columns=variaveis_originais,
+        index=dados.index
     )
 
-    # Garante que as colunas necessárias para filtragem existem.
-    colunas_obrigatorias = [
-        "IDEB",
-        "Nota SAEB - Nota Média Padronizada (N)"
-    ]
+    X_var_array = seletor_variancia.transform(X_imp)
+    X_var = pd.DataFrame(
+        X_var_array,
+        columns=variaveis_pos_variancia,
+        index=dados.index
+    )
 
-    for coluna in colunas_obrigatorias:
-        if coluna not in df.columns:
-            st.error(f"A coluna obrigatória '{coluna}' não foi encontrada na base.")
-            st.stop()
-
-    # Remove registros sem IDEB e sem Nota Média Padronizada.
-    df = df[df[colunas_obrigatorias].notnull().all(axis=1)].copy()
-
-    # Lista de variáveis com possível imputação por mediana.
-    variaveis_para_imputar = [
-        "Valor Total repassado ao BPC",
-        "Total de Beneficiários do BPC",
-        "Idosos beneficiários do BPC",
-        "Pessoas com Deficiência beneficiárias do BPC",
-        "Valor Repassado a PCDs pelo RMV",
-        "Valor Repassado a Idosos pelo RMV",
-        "Valor Repassado a Idosos pelo BPC",
-        "Valor Repassado a PCDs pelo BPC",
-        "iptu",
-        "itbi",
-        "irrf",
-        "iss",
-        "cota parte icms",
-        "cota parte ipi-exp",
-        "cota-parte ipva",
-        "fpm",
-        "salário-educação",
-        "pdde",
-        "pnae",
-        "pnate",
-        "convênios",
-        "operação de créditos",
-        "contribuição na formação do fundef/fundeb – destinada",
-        "cota-parte iof-ouro",
-        "receita recebida na redistribuição interna do fundeb (transferência de recursos do fundeb)",
-        "resultado líquido (ganhos ou perdas = recebido - enviado)",
-        "receita da aplicação financeira do fundeb",
-        "complementação da união",
-        "vaaf",
-        "total_composiçâo_complementaçâo_fundeb",
-        "receitas recebidas do fundeb (fundo estadual)",
-        "receitas destinadas ao fundeb (fundo estadual)",
-        "valor aplicado em mde",
-        "educação infantil",
-        "creche",
-        "pré-escola",
-        "ensino fundamental",
-        "ensino profissional não integrado ao ensino regular",
-        "ensino médio",
-        "quota do salário-educação",
-        "despesas com profissionais da educação básica",
-        "Valor da produção -lavour",
-        "Área colhida -lavour"
-    ]
-
-    # Imputação por mediana nas variáveis disponíveis.
-    for variavel in variaveis_para_imputar:
-        if variavel in df.columns:
-            mediana = df[variavel].median()
-            df[variavel] = df[variavel].fillna(mediana)
-
-    # Verifica se todas as variáveis do modelo existem na base.
-    variaveis_ausentes = [
-        var for var in VARIAVEIS_MODELO if var not in df.columns
-    ]
-
+    variaveis_ausentes = [var for var in variaveis_modelo if var not in X_var.columns]
     if variaveis_ausentes:
         st.error(
-            "As seguintes variáveis do modelo não foram encontradas na base: "
+            "As seguintes variáveis finais do modelo não foram encontradas após o pré-processamento: "
             + ", ".join(variaveis_ausentes)
         )
         st.stop()
 
-    # Remove linhas sem valores nas variáveis do modelo ou no IDEB.
-    df = df.dropna(subset=VARIAVEIS_MODELO + ["IDEB"]).copy()
-
-    return df
+    return X_var[variaveis_modelo].copy()
 
 
-# ============================================================
-# FUNÇÃO PARA CARREGAR MODELO
-# ============================================================
-
-@st.cache_resource
-def carregar_modelo(caminho_modelo: str):
-    """
-    Carrega o modelo treinado salvo em formato pkl.
-
-    Parâmetros
-    ----------
-    caminho_modelo : str
-        Caminho do arquivo do modelo.
-
-    Retorno
-    -------
-    object
-        Modelo treinado.
-    """
-
-    if not os.path.exists(caminho_modelo):
-        st.error(
-            f"O modelo não foi encontrado em: {caminho_modelo}. "
-            "Execute primeiro o script 'treinar_modelos.py'."
-        )
-        st.stop()
-
-    return joblib.load(caminho_modelo)
-
-
-# ============================================================
-# FUNÇÃO PARA CARREGAR MÉTRICAS
-# ============================================================
-
-@st.cache_data
-def carregar_metricas(caminho_metricas: str) -> dict:
-    """
-    Carrega as métricas salvas do modelo.
-
-    Parâmetros
-    ----------
-    caminho_metricas : str
-        Caminho do arquivo de métricas.
-
-    Retorno
-    -------
-    dict
-        Dicionário com métricas de avaliação.
-    """
-
-    if not os.path.exists(caminho_metricas):
-        st.error(
-            f"As métricas não foram encontradas em: {caminho_metricas}. "
-            "Execute primeiro o script 'treinar_modelos.py'."
-        )
-        st.stop()
-
-    return joblib.load(caminho_metricas)
-
-
-# ============================================================
-# FUNÇÕES AUXILIARES
-# ============================================================
-
-def formatar_numero(valor: float, casas: int = 4) -> str:
-    """
-    Formata números no padrão brasileiro.
-
-    Parâmetros
-    ----------
-    valor : float
-        Valor numérico a ser formatado.
-
-    casas : int
-        Número de casas decimais.
-
-    Retorno
-    -------
-    str
-        Valor formatado com vírgula decimal.
-    """
-
-    if pd.isna(valor):
-        return ""
-
-    return f"{valor:.{casas}f}".replace(".", ",")
-
-
-def obter_coluna_municipio(df: pd.DataFrame) -> str:
-    """
-    Identifica a coluna de município na base.
-
-    Parâmetros
-    ----------
-    df : pd.DataFrame
-        Base de dados.
-
-    Retorno
-    -------
-    str
-        Nome da coluna de município.
-    """
-
-    possiveis_colunas = [
-        "Nome do Município",
-        "Município",
-        "municipio",
-        "nome_municipio",
-        "Nome Município"
-    ]
-
-    for coluna in possiveis_colunas:
-        if coluna in df.columns:
-            return coluna
-
-    # Caso nenhuma coluna seja encontrada, a aplicação cria uma
-    # identificação genérica para evitar erro.
-    df["Município"] = [f"Município {i + 1}" for i in range(df.shape[0])]
-    return "Município"
-
-
-def criar_tabela_metricas(metricas: dict) -> pd.DataFrame:
-    """
-    Cria uma tabela organizada com as métricas do modelo.
-
-    Parâmetros
-    ----------
-    metricas : dict
-        Dicionário de métricas salvo no treinamento.
-
-    Retorno
-    -------
-    pd.DataFrame
-        Tabela formatada com métricas.
-    """
-
-    tabela = pd.DataFrame(
-        [
-            {
-                "Conjunto": "Treinamento",
-                "RMSE": metricas["rmse_train"],
-                "MAE": metricas["mae_train"],
-                "R²": metricas["r2_train"]
-            },
-            {
-                "Conjunto": "Teste",
-                "RMSE": metricas["rmse_test"],
-                "MAE": metricas["mae_test"],
-                "R²": metricas["r2_test"]
-            },
-            {
-                "Conjunto": "Validação cruzada",
-                "RMSE": f"{metricas['rmse_cv']:.4f} ± {metricas['rmse_std']:.4f}",
-                "MAE": f"{metricas['mae_cv']:.4f} ± {metricas['mae_std']:.4f}",
-                "R²": f"{metricas['r2_cv']:.4f} ± {metricas['r2_std']:.4f}"
-            }
-        ]
-    )
-
-    return tabela
-
-
-def aplicar_alteracoes_cenario(
-    X_base: pd.DataFrame,
-    alteracoes: list
-) -> pd.DataFrame:
-    """
-    Aplica as alterações percentuais definidas pelo usuário.
-
-    Parâmetros
-    ----------
-    X_base : pd.DataFrame
-        Matriz original de variáveis explicativas.
-
-    alteracoes : list
-        Lista de dicionários contendo variável, operação e percentual.
-
-    Retorno
-    -------
-    pd.DataFrame
-        Matriz alterada conforme o cenário.
-    """
-
-    # Cria uma cópia para preservar a base original.
+def aplicar_alteracoes_cenario(X_base: pd.DataFrame, alteracoes: list[dict]) -> pd.DataFrame:
+    """Aplica alterações percentuais às variáveis finais do modelo."""
     X_cenario = X_base.copy()
 
-    # Aplica cada alteração acumulada no cenário.
     for item in alteracoes:
-        variavel = item["Variável"]
+        variavel = item["variavel_tecnica"]
         operacao = item["Operação"]
         percentual = item["Percentual"]
 
-        # Define o fator multiplicativo.
-        if operacao == "Aumento":
-            fator = 1 + percentual / 100
-        else:
-            fator = 1 - percentual / 100
-
-        # Aplica a alteração na variável selecionada.
+        fator = 1 + percentual / 100 if operacao == "Aumento" else 1 - percentual / 100
         X_cenario[variavel] = X_cenario[variavel] * fator
 
-        # Regra de segurança para variáveis proporcionais de formação docente.
-        # Como são proporções, não devem ultrapassar 1.
-        if "form docente" in variavel.lower():
-            X_cenario[variavel] = X_cenario[variavel].clip(upper=1)
-
-        # Evita valores negativos em variáveis quantitativas após reduções.
-        X_cenario[variavel] = X_cenario[variavel].clip(lower=0)
+        # Variáveis proporcionais ou percentuais não devem extrapolar limites plausíveis.
+        nome_lower = variavel.lower()
+        if (
+            "percentual" in nome_lower
+            or "taxa" in nome_lower
+            or "grupo" in nome_lower
+            or "proporcao" in nome_lower
+            or "proporção" in nome_lower
+        ):
+            X_cenario[variavel] = X_cenario[variavel].clip(lower=0)
+        else:
+            X_cenario[variavel] = X_cenario[variavel].clip(lower=0)
 
     return X_cenario
 
 
+def criar_tabela_metricas_artefato(artefato: dict) -> pd.DataFrame:
+    """Cria uma tabela resumida com as métricas disponíveis no artefato."""
+    modelo_final_escolhido = artefato.get("modelo_final_escolhido", {})
+    metricas_modelo_final = artefato.get("metricas_modelo_final", None)
+    resultado_friedman = artefato.get("resultado_friedman", None)
+
+    if isinstance(modelo_final_escolhido, pd.Series):
+        modelo_final_escolhido = modelo_final_escolhido.to_dict()
+
+    linhas = [
+        {"Indicador": "Modelo final", "Valor": artefato.get("nome_modelo", "Não disponível")},
+        {"Indicador": "Conjunto de variáveis", "Valor": artefato.get("nome_conjunto", "Não disponível")},
+        {"Indicador": "Número de variáveis", "Valor": len(artefato.get("variaveis_modelo", []))},
+        {"Indicador": "RMSE na validação cruzada inicial", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_cv"))},
+        {"Indicador": "R² na validação cruzada inicial", "Valor": formatar_numero(modelo_final_escolhido.get("R2_cv"))},
+        {"Indicador": "RMSE no teste", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_teste"))},
+        {"Indicador": "R² no teste", "Valor": formatar_numero(modelo_final_escolhido.get("R2_teste"))},
+        {"Indicador": "RMSE médio no RepeatedKFold", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_repeated_medio"))},
+        {"Indicador": "Desvio-padrão do RMSE no RepeatedKFold", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_repeated_desvio"))},
+        {"Indicador": "R² médio no RepeatedKFold", "Valor": formatar_numero(modelo_final_escolhido.get("R2_repeated_medio"))}
+    ]
+
+    if isinstance(metricas_modelo_final, pd.DataFrame) and not metricas_modelo_final.empty:
+        for _, linha in metricas_modelo_final.iterrows():
+            base = linha.get("base", "")
+            linhas.append({"Indicador": f"MAE final - {base}", "Valor": formatar_numero(linha.get("MAE"))})
+            linhas.append({"Indicador": f"RMSE final - {base}", "Valor": formatar_numero(linha.get("RMSE"))})
+            linhas.append({"Indicador": f"R² final - {base}", "Valor": formatar_numero(linha.get("R2"))})
+
+    if isinstance(resultado_friedman, pd.DataFrame) and not resultado_friedman.empty:
+        linhas.append({"Indicador": "Teste de Friedman - p-valor", "Valor": formatar_numero(resultado_friedman.iloc[0].get("p_valor"), 8)})
+        linhas.append({"Indicador": "Teste de Friedman significativo a 5%", "Valor": str(resultado_friedman.iloc[0].get("significativo_5%"))})
+
+    return pd.DataFrame(linhas)
+
+
 # ============================================================
 # ESTADO DA SESSÃO
-# ============================================================
-#
-# O Streamlit reexecuta o script a cada interação.
-# Por isso, o session_state é usado para guardar os cenários
-# e as variáveis adicionadas pelo usuário.
 # ============================================================
 
 if "alteracoes_atuais" not in st.session_state:
@@ -505,8 +372,14 @@ if "resultado_municipal" not in st.session_state:
 
 
 # ============================================================
-# CABEÇALHO DA APLICAÇÃO
+# CABEÇALHO
 # ============================================================
+
+logo_path = os.path.join(PASTA_ASSETS, "logo_simulador_ideb.png")
+if os.path.exists(logo_path):
+    col_logo1, col_logo2, col_logo3 = st.columns([1, 6, 1])
+    with col_logo2:
+        st.image(logo_path, use_container_width=True)
 
 st.markdown(
     '<div class="titulo-principal">Simulador de Cenários Educacionais para o IDEB Municipal</div>',
@@ -515,8 +388,8 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitulo">'
-    'Aplicação baseada em modelo XGBoost para simulação de alterações hipotéticas '
-    'em variáveis associadas ao IDEB municipal.'
+    'Aplicação baseada no artefato final do modelo selecionado no artigo para simulação '
+    'de alterações hipotéticas em variáveis associadas ao IDEB municipal.'
     '</div>',
     unsafe_allow_html=True
 )
@@ -532,6 +405,20 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+
+# ============================================================
+# VERIFICAÇÃO DE ETAPAS DISPONÍVEIS
+# ============================================================
+
+ETAPAS_DISPONIVEIS = detectar_etapas_disponiveis()
+
+if not ETAPAS_DISPONIVEIS:
+    st.error(
+        "Nenhuma etapa está pronta para uso. Verifique se a pasta 'data' contém a base Excel "
+        "e se a pasta 'models' contém o artefato final exportado pelo notebook metodológico."
+    )
+    st.stop()
 
 
 # ============================================================
@@ -561,31 +448,44 @@ with aba_simulacao:
     with col_etapa:
         etapa = st.selectbox(
             "Selecione a etapa de ensino",
-            list(CAMINHOS_BASES.keys())
+            list(ETAPAS_DISPONIVEIS.keys())
         )
 
     with col_info:
         st.info(
-            "A simulação utiliza apenas os registros de 2023. "
-            "As alterações são aplicadas às variáveis explicativas e o modelo estima "
-            "o IDEB médio resultante do cenário."
+            "A simulação utiliza os registros de 2023. As alterações são aplicadas às "
+            "variáveis finais do modelo e o sistema estima a resposta condicional do IDEB."
         )
 
-    # Carrega a base, o modelo e as métricas da etapa selecionada.
-    df = carregar_base(CAMINHOS_BASES[etapa])
-    modelo = carregar_modelo(CAMINHOS_MODELOS[etapa])
-    metricas = carregar_metricas(CAMINHOS_METRICAS[etapa])
+    caminho_base = ETAPAS_DISPONIVEIS[etapa]["base"]
+    caminho_artefato = ETAPAS_DISPONIVEIS[etapa]["artefato"]
 
-    # Filtra os dados de 2023.
-    if "Ano" not in df.columns:
-        st.error("A coluna 'Ano' não foi encontrada na base.")
+    df = carregar_base(caminho_base)
+    artefato = carregar_artefato(caminho_artefato)
+    modelo = artefato["modelo_final"]
+    variaveis_modelo = artefato["variaveis_modelo"]
+
+    coluna_ano = obter_coluna_existente(df, ["ano", "Ano", "ANO"])
+    coluna_ideb = obter_coluna_existente(df, ["ideb", "IDEB", "Ideb"])
+
+    if coluna_ano is None:
+        st.error("Não foi encontrada coluna de ano na base. Use 'ano' ou 'Ano'.")
         st.stop()
 
-    df_2023 = df[df["Ano"] == 2023].copy()
+    if coluna_ideb is None:
+        st.error("Não foi encontrada coluna de IDEB na base. Use 'ideb' ou 'IDEB'.")
+        st.stop()
+
+    df_2023 = df[df[coluna_ano] == 2023].copy()
+    df_2023 = df_2023[df_2023[coluna_ideb].notnull()].copy()
 
     if df_2023.empty:
-        st.error("Não foram encontrados registros referentes ao ano de 2023 na base.")
+        st.error("Não foram encontrados registros válidos referentes ao ano de 2023 na base.")
         st.stop()
+
+    X_base = preparar_entrada_modelo(df_2023, artefato)
+
+    rotulos_variaveis = {var: nome_variavel_texto(var) for var in variaveis_modelo}
 
     st.markdown("### Variáveis do cenário")
 
@@ -594,7 +494,8 @@ with aba_simulacao:
     with col1:
         variavel = st.selectbox(
             "Variável a alterar",
-            VARIAVEIS_MODELO
+            variaveis_modelo,
+            format_func=lambda x: rotulos_variaveis.get(x, x)
         )
 
     with col2:
@@ -629,21 +530,21 @@ with aba_simulacao:
         )
 
     if adicionar:
-        nova_alteracao = {
-            "Variável": variavel,
-            "Operação": operacao,
-            "Percentual": percentual
-        }
-
-        # Evita duplicidade da mesma variável no mesmo cenário.
         variaveis_ja_adicionadas = [
-            item["Variável"] for item in st.session_state.alteracoes_atuais
+            item["variavel_tecnica"] for item in st.session_state.alteracoes_atuais
         ]
 
         if variavel in variaveis_ja_adicionadas:
             st.warning("Essa variável já foi adicionada ao cenário atual.")
         else:
-            st.session_state.alteracoes_atuais.append(nova_alteracao)
+            st.session_state.alteracoes_atuais.append(
+                {
+                    "Variável": rotulos_variaveis[variavel],
+                    "variavel_tecnica": variavel,
+                    "Operação": operacao,
+                    "Percentual": percentual
+                }
+            )
             st.success("Variável adicionada ao cenário.")
 
     if limpar:
@@ -652,10 +553,9 @@ with aba_simulacao:
 
     if st.session_state.alteracoes_atuais:
         st.markdown("#### Alterações adicionadas ao cenário")
-        st.dataframe(
-            pd.DataFrame(st.session_state.alteracoes_atuais),
-            use_container_width=True
-        )
+        tabela_alteracoes = pd.DataFrame(st.session_state.alteracoes_atuais)
+        tabela_alteracoes = tabela_alteracoes[["Variável", "Operação", "Percentual"]]
+        st.dataframe(tabela_alteracoes, use_container_width=True)
     else:
         st.caption("Nenhuma variável foi adicionada ao cenário atual.")
 
@@ -678,35 +578,21 @@ with aba_simulacao:
         elif not nome_cenario.strip():
             st.warning("Informe um nome para o cenário.")
         else:
-            # Matriz original das variáveis explicativas em 2023.
-            X_base = df_2023[VARIAVEIS_MODELO].copy()
-
-            # Matriz alterada conforme as variáveis adicionadas.
             X_cenario = aplicar_alteracoes_cenario(
                 X_base,
                 st.session_state.alteracoes_atuais
             )
 
-            # Predição sem alteração.
             pred_sem_alteracao = modelo.predict(X_base)
-
-            # Predição com alterações do cenário.
             pred_cenario = modelo.predict(X_cenario)
 
-            # IDEB real médio de 2023.
-            ideb_real_medio = df_2023["IDEB"].mean()
-
-            # IDEB previsto sem alteração.
+            ideb_real_medio = df_2023[coluna_ideb].mean()
             ideb_previsto_sem_alteracao = pred_sem_alteracao.mean()
-
-            # IDEB previsto no cenário.
             ideb_previsto_cenario = pred_cenario.mean()
 
-            # Diferenças estimadas.
             delta_previsto = ideb_previsto_cenario - ideb_previsto_sem_alteracao
             delta_real = ideb_previsto_cenario - ideb_real_medio
 
-            # Descrição das variáveis alteradas.
             descricao_variaveis = "; ".join(
                 [
                     f"{item['Variável']} ({item['Operação']} de {item['Percentual']:.1f}%)"
@@ -714,7 +600,6 @@ with aba_simulacao:
                 ]
             )
 
-            # Resultado consolidado do cenário.
             resultado_geral = {
                 "Etapa": etapa,
                 "Cenário": nome_cenario.strip(),
@@ -726,18 +611,15 @@ with aba_simulacao:
                 "Diferença em relação ao IDEB real": round(delta_real, 4)
             }
 
-            # Armazena o resultado geral na sessão.
             st.session_state.resultados_cenarios.append(resultado_geral)
 
-            # Identifica a coluna de município.
             coluna_municipio = obter_coluna_municipio(df_2023)
 
-            # Cria tabela municipal.
-            tabela_municipal = df_2023[[coluna_municipio, "IDEB"]].copy()
+            tabela_municipal = df_2023[[coluna_municipio, coluna_ideb]].copy()
             tabela_municipal = tabela_municipal.rename(
                 columns={
                     coluna_municipio: "Município",
-                    "IDEB": "IDEB real em 2023"
+                    coluna_ideb: "IDEB real em 2023"
                 }
             )
 
@@ -757,17 +639,11 @@ with aba_simulacao:
                 4
             )
 
-            # Guarda a tabela municipal da última simulação.
             st.session_state.resultado_municipal = tabela_municipal.copy()
-
-            # Limpa as alterações atuais após gerar o cenário.
             st.session_state.alteracoes_atuais = []
 
             st.success("Cenário gerado com sucesso.")
-            st.dataframe(
-                pd.DataFrame([resultado_geral]),
-                use_container_width=True
-            )
+            st.dataframe(pd.DataFrame([resultado_geral]), use_container_width=True)
 
 
 # ============================================================
@@ -781,46 +657,23 @@ with aba_resultados:
         st.info("Nenhum cenário foi gerado ainda.")
     else:
         df_resultados = pd.DataFrame(st.session_state.resultados_cenarios)
-
-        st.dataframe(
-            df_resultados,
-            use_container_width=True
-        )
+        st.dataframe(df_resultados, use_container_width=True)
 
         st.markdown("### Indicadores do último cenário gerado")
-
         ultimo = df_resultados.iloc[-1]
 
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 
         with col_m1:
-            st.metric(
-                "IDEB real médio em 2023",
-                formatar_numero(ultimo["IDEB real médio em 2023"])
-            )
-
+            st.metric("IDEB real médio em 2023", formatar_numero(ultimo["IDEB real médio em 2023"]))
         with col_m2:
-            st.metric(
-                "Previsto sem alteração",
-                formatar_numero(ultimo["IDEB previsto sem alteração"])
-            )
-
+            st.metric("Previsto sem alteração", formatar_numero(ultimo["IDEB previsto sem alteração"]))
         with col_m3:
-            st.metric(
-                "Previsto no cenário",
-                formatar_numero(ultimo["IDEB previsto no cenário"])
-            )
-
+            st.metric("Previsto no cenário", formatar_numero(ultimo["IDEB previsto no cenário"]))
         with col_m4:
-            st.metric(
-                "Diferença estimada",
-                formatar_numero(
-                    ultimo["Diferença em relação ao previsto sem alteração"]
-                )
-            )
+            st.metric("Diferença estimada", formatar_numero(ultimo["Diferença em relação ao previsto sem alteração"]))
 
         st.markdown("### IDEB médio previsto por cenário")
-
         fig_ideb = px.bar(
             df_resultados,
             x="Cenário",
@@ -829,12 +682,7 @@ with aba_resultados:
             text="IDEB previsto no cenário",
             title="IDEB médio previsto por cenário"
         )
-
-        fig_ideb.update_traces(
-            texttemplate="%{text:.4f}",
-            textposition="outside"
-        )
-
+        fig_ideb.update_traces(texttemplate="%{text:.4f}", textposition="outside")
         fig_ideb.update_layout(
             plot_bgcolor="white",
             paper_bgcolor="white",
@@ -843,11 +691,9 @@ with aba_resultados:
             yaxis_title="IDEB médio previsto",
             legend_title="Etapa de ensino"
         )
-
         st.plotly_chart(fig_ideb, use_container_width=True)
 
         st.markdown("### Variação em relação ao cenário sem alteração")
-
         fig_delta = px.bar(
             df_resultados,
             x="Cenário",
@@ -856,12 +702,7 @@ with aba_resultados:
             text="Diferença em relação ao previsto sem alteração",
             title="Diferença estimada em relação ao IDEB previsto sem alteração"
         )
-
-        fig_delta.update_traces(
-            texttemplate="%{text:.4f}",
-            textposition="outside"
-        )
-
+        fig_delta.update_traces(texttemplate="%{text:.4f}", textposition="outside")
         fig_delta.update_layout(
             plot_bgcolor="white",
             paper_bgcolor="white",
@@ -870,21 +711,10 @@ with aba_resultados:
             yaxis_title="Diferença estimada",
             legend_title="Etapa de ensino"
         )
-
-        fig_delta.add_hline(
-            y=0,
-            line_width=1,
-            line_color="black"
-        )
-
+        fig_delta.add_hline(y=0, line_width=1, line_color="black")
         st.plotly_chart(fig_delta, use_container_width=True)
 
-        # Exportação dos resultados gerais.
-        csv_resultados = df_resultados.to_csv(
-            index=False,
-            encoding="utf-8-sig"
-        )
-
+        csv_resultados = df_resultados.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="Baixar resultados gerais em CSV",
             data=csv_resultados,
@@ -904,14 +734,9 @@ with aba_municipios:
         st.info("Nenhum resultado municipal foi gerado ainda.")
     else:
         tabela_municipal = st.session_state.resultado_municipal.copy()
-
-        st.dataframe(
-            tabela_municipal,
-            use_container_width=True
-        )
+        st.dataframe(tabela_municipal, use_container_width=True)
 
         st.markdown("### Municípios com maiores variações positivas")
-
         ranking_positivo = tabela_municipal.sort_values(
             by="Diferença em relação ao previsto sem alteração",
             ascending=False
@@ -925,12 +750,7 @@ with aba_municipios:
             text="Diferença em relação ao previsto sem alteração",
             title="Maiores variações positivas estimadas"
         )
-
-        fig_pos.update_traces(
-            texttemplate="%{text:.4f}",
-            textposition="outside"
-        )
-
+        fig_pos.update_traces(texttemplate="%{text:.4f}", textposition="outside")
         fig_pos.update_layout(
             plot_bgcolor="white",
             paper_bgcolor="white",
@@ -939,11 +759,9 @@ with aba_municipios:
             yaxis_title="Município",
             yaxis={"categoryorder": "total ascending"}
         )
-
         st.plotly_chart(fig_pos, use_container_width=True)
 
         st.markdown("### Municípios com maiores variações negativas")
-
         ranking_negativo = tabela_municipal.sort_values(
             by="Diferença em relação ao previsto sem alteração",
             ascending=True
@@ -957,12 +775,7 @@ with aba_municipios:
             text="Diferença em relação ao previsto sem alteração",
             title="Maiores variações negativas estimadas"
         )
-
-        fig_neg.update_traces(
-            texttemplate="%{text:.4f}",
-            textposition="outside"
-        )
-
+        fig_neg.update_traces(texttemplate="%{text:.4f}", textposition="outside")
         fig_neg.update_layout(
             plot_bgcolor="white",
             paper_bgcolor="white",
@@ -971,15 +784,9 @@ with aba_municipios:
             yaxis_title="Município",
             yaxis={"categoryorder": "total descending"}
         )
-
         st.plotly_chart(fig_neg, use_container_width=True)
 
-        # Exportação da tabela municipal.
-        csv_municipal = tabela_municipal.to_csv(
-            index=False,
-            encoding="utf-8-sig"
-        )
-
+        csv_municipal = tabela_municipal.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="Baixar resultados municipais em CSV",
             data=csv_municipal,
@@ -993,42 +800,22 @@ with aba_municipios:
 # ============================================================
 
 with aba_metricas:
-    st.subheader("Métricas de avaliação do modelo")
+    st.subheader("Métricas e informações do modelo")
 
     etapa_metricas = st.selectbox(
         "Selecione a etapa de ensino",
-        list(CAMINHOS_METRICAS.keys()),
+        list(ETAPAS_DISPONIVEIS.keys()),
         key="etapa_metricas"
     )
 
-    metricas_etapa = carregar_metricas(CAMINHOS_METRICAS[etapa_metricas])
+    artefato_metricas = carregar_artefato(ETAPAS_DISPONIVEIS[etapa_metricas]["artefato"])
+    tabela_metricas = criar_tabela_metricas_artefato(artefato_metricas)
 
-    tabela_metricas = criar_tabela_metricas(metricas_etapa)
-
-    st.dataframe(
-        tabela_metricas,
-        use_container_width=True
-    )
-
-    st.markdown("### Informações da base utilizada no treinamento")
-
-    col_base1, col_base2 = st.columns(2)
-
-    with col_base1:
-        st.metric(
-            "Número de registros",
-            int(metricas_etapa["n_linhas"])
-        )
-
-    with col_base2:
-        st.metric(
-            "Número de colunas",
-            int(metricas_etapa["n_colunas"])
-        )
+    st.dataframe(tabela_metricas, use_container_width=True)
 
     st.caption(
-        "As métricas foram calculadas no treinamento do modelo. "
-        "A validação cruzada foi realizada com 5 folds no conjunto de treinamento."
+        "As métricas exibidas são aquelas armazenadas no artefato final do modelo, "
+        "exportado a partir do notebook metodológico do artigo."
     )
 
 
@@ -1039,27 +826,30 @@ with aba_metricas:
 with aba_metodologia:
     st.subheader("Notas metodológicas da aplicação")
 
+    etapa_metodologia = st.selectbox(
+        "Selecione a etapa de ensino",
+        list(ETAPAS_DISPONIVEIS.keys()),
+        key="etapa_metodologia"
+    )
+
+    artefato_metodologia = carregar_artefato(ETAPAS_DISPONIVEIS[etapa_metodologia]["artefato"])
+    variaveis_modelo_metodologia = artefato_metodologia["variaveis_modelo"]
+
     st.markdown(
         """
-        Esta aplicação foi construída para operacionalizar a simulação de cenários
-        descrita no artigo. O procedimento parte de modelos preditivos treinados
-        com dados educacionais, socioeconômicos e territoriais agregados em nível
-        municipal.
+        Esta aplicação operacionaliza a simulação de cenários descrita no artigo.
+        O sistema utiliza o artefato final do modelo selecionado no processo metodológico,
+        preservando o pré-processamento aplicado no treinamento, incluindo imputação,
+        remoção de variáveis de variância zero e seleção do subconjunto final de variáveis.
 
-        A simulação é realizada apenas sobre os registros de 2023. O usuário seleciona
-        uma ou mais variáveis explicativas, define o percentual de aumento ou redução
-        e o sistema recalcula o IDEB previsto pelo modelo para esse novo cenário.
+        A simulação é realizada sobre os registros de 2023. O usuário seleciona uma ou mais
+        variáveis explicativas, define percentuais de aumento ou redução e o sistema recalcula
+        o IDEB previsto pelo modelo para o novo cenário.
 
-        A diferença entre o IDEB previsto sem alteração e o IDEB previsto no cenário
-        representa uma variação estimada pelo modelo. Essa diferença não deve ser
-        interpretada como efeito causal, pois a aplicação não identifica mecanismos
-        causais, não controla confundimento por desenho causal e não estima efeitos
-        de tratamento.
-
-        A utilidade da aplicação está na análise exploratória e na avaliação de
-        sensibilidade do modelo. Portanto, os resultados podem apoiar a formulação
-        de hipóteses, a comparação de cenários hipotéticos e a visualização de
-        possíveis respostas do modelo diante de alterações nas variáveis.
+        A diferença entre o IDEB previsto sem alteração e o IDEB previsto no cenário representa
+        uma variação estimada pelo modelo. Essa diferença não deve ser interpretada como efeito
+        causal, pois a aplicação não identifica mecanismos causais, não controla confundimento
+        por desenho causal e não estima efeitos de tratamento.
         """
     )
 
@@ -1067,28 +857,18 @@ with aba_metodologia:
 
     tabela_variaveis = pd.DataFrame(
         {
-            "Variável": VARIAVEIS_MODELO,
-            "Descrição operacional": [
-                "Indicador econômico municipal utilizado como proxy de contexto socioeconômico.",
-                "Indicador educacional associado à proporção de estudantes em defasagem idade-série.",
-                "Indicador de adequação da formação docente.",
-                "Indicador territorial e produtivo relacionado à área agrícola.",
-                "Indicador econômico associado à produção na extração vegetal.",
-                "Valor repassado no âmbito do Programa Criança Feliz."
-            ]
+            "Variável exibida no simulador": [nome_variavel_texto(v) for v in variaveis_modelo_metodologia],
+            "Nome técnico no artefato": variaveis_modelo_metodologia
         }
     )
 
-    st.dataframe(
-        tabela_variaveis,
-        use_container_width=True
-    )
+    st.dataframe(tabela_variaveis, use_container_width=True)
 
     st.markdown(
         """
         A interpretação dos cenários deve considerar as limitações dos dados, a agregação
         municipal, a qualidade das variáveis disponíveis e o fato de que modelos preditivos
-        capturam padrões estatísticos presentes na base, mas não substituem análise
-        educacional, institucional e territorial.
+        capturam padrões estatísticos presentes na base, mas não substituem análise educacional,
+        institucional e territorial.
         """
     )

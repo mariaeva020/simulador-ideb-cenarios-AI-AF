@@ -1,22 +1,39 @@
-# Ambiente virtual
-venv/
+# Ambientes virtuais
 .venv/
+venv/
+env/
+ENV/
 
-# Arquivos temporários do Python
+# Arquivos Python temporários
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 
-# Arquivos de sistema
+# Jupyter / Colab
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Variáveis de ambiente e arquivos locais
+.env
+.env.*
+
+# Logs e arquivos temporários
+*.log
+*.tmp
+*.bak
 .DS_Store
 Thumbs.db
 
-# Configurações locais
-.env
+# Saídas geradas pela aplicação
+outputs/
+exports/
+*.csv
 
-# Cache do Streamlit
-.streamlit/
-
-# Saídas temporárias
-*.log
+# Bases e modelos podem ser sensíveis ou grandes.
+# Descomente as linhas abaixo se o repositório não deve armazenar dados/modelos.
+# data/*.xlsx
+# data/*.csv
+# models/*.pkl
+# *.pkl

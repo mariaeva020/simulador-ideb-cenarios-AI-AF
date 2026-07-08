@@ -751,6 +751,9 @@ if "resultados_cenarios" not in st.session_state:
 if "resultado_municipal" not in st.session_state:
     st.session_state.resultado_municipal = pd.DataFrame()
 
+if "resultados_municipais_cenarios" not in st.session_state:
+    st.session_state.resultados_municipais_cenarios = []
+
 
 # ============================================================
 # CABEÇALHO
@@ -1021,6 +1024,7 @@ with aba_simulacao:
             )
 
             st.session_state.resultado_municipal = tabela_municipal.copy()
+            st.session_state.resultados_municipais_cenarios.append(tabela_municipal.copy())
             st.session_state.alteracoes_atuais = []
 
             st.success("Cenário gerado com sucesso.")
@@ -1107,18 +1111,71 @@ with aba_resultados:
 # ============================================================
 # ABA 3: RESULTADOS MUNICIPAIS
 # ============================================================
+# ============================================================
+# ABA 3: RESULTADOS MUNICIPAIS
+# ============================================================
 
 with aba_municipios:
-    st.subheader("Resultados municipais do último cenário gerado")
+    st.subheader("Resultados municipais dos cenários simulados")
 
-    if st.session_state.resultado_municipal.empty:
+    if "resultados_municipais_cenarios" not in st.session_state:
+        st.session_state.resultados_municipais_cenarios = []
+
+    if not st.session_state.resultados_municipais_cenarios:
         st.info("Nenhum resultado municipal foi gerado ainda.")
     else:
-        tabela_municipal = st.session_state.resultado_municipal.copy()
-        st.dataframe(tabela_municipal, use_container_width=True)
+        tabela_municipal = pd.concat(
+            st.session_state.resultados_municipais_cenarios,
+            ignore_index=True
+        )
+
+        st.markdown("### Tabela municipal consolidada")
+
+        col_filtro1, col_filtro2 = st.columns([1, 2])
+
+        with col_filtro1:
+            etapas_disponiveis_municipal = ["Todas"] + sorted(
+                tabela_municipal["Etapa"].dropna().unique().tolist()
+            )
+
+            filtro_etapa_municipal = st.selectbox(
+                "Filtrar por etapa de ensino",
+                etapas_disponiveis_municipal,
+                key="filtro_etapa_municipal"
+            )
+
+        with col_filtro2:
+            cenarios_disponiveis_municipal = ["Todos"] + sorted(
+                tabela_municipal["Cenário"].dropna().unique().tolist()
+            )
+
+            filtro_cenario_municipal = st.selectbox(
+                "Filtrar por cenário",
+                cenarios_disponiveis_municipal,
+                key="filtro_cenario_municipal"
+            )
+
+        tabela_municipal_filtrada = tabela_municipal.copy()
+
+        if filtro_etapa_municipal != "Todas":
+            tabela_municipal_filtrada = tabela_municipal_filtrada[
+                tabela_municipal_filtrada["Etapa"] == filtro_etapa_municipal
+            ]
+
+        if filtro_cenario_municipal != "Todos":
+            tabela_municipal_filtrada = tabela_municipal_filtrada[
+                tabela_municipal_filtrada["Cenário"] == filtro_cenario_municipal
+            ]
+
+        st.dataframe(
+            tabela_municipal_filtrada,
+            width="stretch",
+            hide_index=True
+        )
 
         st.markdown("### Municípios com maiores variações positivas")
-        ranking_positivo = tabela_municipal.sort_values(
+
+        ranking_positivo = tabela_municipal_filtrada.sort_values(
             by="Diferença em relação ao previsto sem alteração",
             ascending=False
         ).head(15)
@@ -1127,23 +1184,32 @@ with aba_municipios:
             ranking_positivo,
             x="Diferença em relação ao previsto sem alteração",
             y="Município",
+            color="Cenário",
             orientation="h",
             text="Diferença em relação ao previsto sem alteração",
             title="Maiores variações positivas estimadas"
         )
-        fig_pos.update_traces(texttemplate="%{text:.4f}", textposition="outside")
+
+        fig_pos.update_traces(
+            texttemplate="%{text:.4f}",
+            textposition="outside"
+        )
+
         fig_pos.update_layout(
             plot_bgcolor="white",
             paper_bgcolor="white",
             title_font_color="#23406E",
             xaxis_title="Diferença estimada",
             yaxis_title="Município",
+            legend_title="Cenário",
             yaxis={"categoryorder": "total ascending"}
         )
-        st.plotly_chart(fig_pos, use_container_width=True)
+
+        st.plotly_chart(fig_pos, width="stretch")
 
         st.markdown("### Municípios com maiores variações negativas")
-        ranking_negativo = tabela_municipal.sort_values(
+
+        ranking_negativo = tabela_municipal_filtrada.sort_values(
             by="Diferença em relação ao previsto sem alteração",
             ascending=True
         ).head(15)
@@ -1152,26 +1218,38 @@ with aba_municipios:
             ranking_negativo,
             x="Diferença em relação ao previsto sem alteração",
             y="Município",
+            color="Cenário",
             orientation="h",
             text="Diferença em relação ao previsto sem alteração",
             title="Maiores variações negativas estimadas"
         )
-        fig_neg.update_traces(texttemplate="%{text:.4f}", textposition="outside")
+
+        fig_neg.update_traces(
+            texttemplate="%{text:.4f}",
+            textposition="outside"
+        )
+
         fig_neg.update_layout(
             plot_bgcolor="white",
             paper_bgcolor="white",
             title_font_color="#23406E",
             xaxis_title="Diferença estimada",
             yaxis_title="Município",
+            legend_title="Cenário",
             yaxis={"categoryorder": "total descending"}
         )
-        st.plotly_chart(fig_neg, use_container_width=True)
 
-        csv_municipal = tabela_municipal.to_csv(index=False, encoding="utf-8-sig")
+        st.plotly_chart(fig_neg, width="stretch")
+
+        csv_municipal = tabela_municipal.to_csv(
+            index=False,
+            encoding="utf-8-sig"
+        )
+
         st.download_button(
-            label="Baixar resultados municipais em CSV",
+            label="Baixar resultados municipais consolidados em CSV",
             data=csv_municipal,
-            file_name="resultados_municipais_cenario_ideb.csv",
+            file_name="resultados_municipais_cenarios_ideb.csv",
             mime="text/csv"
         )
 

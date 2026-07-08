@@ -1,7 +1,7 @@
 streamlit
-pandas
-numpy
-scikit-learn
+pandas==2.3.3
+numpy==2.0.2
+scikit-learn==1.6.1
 catboost
 interpret-core[aplr]==0.7.8
 openpyxl

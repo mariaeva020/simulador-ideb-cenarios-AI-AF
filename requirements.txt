@@ -1,9 +1,9 @@
-streamlit
+streamlit==1.51.0
 pandas==2.3.3
 numpy==2.0.2
 scikit-learn==1.6.1
-catboost
+catboost==1.2.8
 interpret-core[aplr]==0.7.8
-openpyxl
-plotly
-joblib
+openpyxl==3.1.5
+plotly==6.5.0
+joblib==1.5.2

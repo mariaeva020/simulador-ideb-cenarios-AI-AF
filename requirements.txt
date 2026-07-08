@@ -3,7 +3,7 @@ pandas
 numpy
 scikit-learn
 catboost
-shap
+interpret-core[aplr]==0.7.8
 openpyxl
 plotly
 joblib

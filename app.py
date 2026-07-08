@@ -21,6 +21,7 @@
 import os
 import re
 import joblib
+from html import escape
 
 import numpy as np
 import pandas as pd
@@ -71,6 +72,10 @@ CONFIG_ETAPAS = {
 # ESTILO VISUAL
 # ============================================================
 
+# ============================================================
+# ESTILO VISUAL
+# ============================================================
+
 st.markdown(
     """
     <style>
@@ -106,6 +111,101 @@ st.markdown(
         color: #6B7280;
         font-size: 0.9rem;
     }
+
+    .metric-card-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin: 1.2rem 0 1.4rem 0;
+    }
+
+    .metric-card {
+        background-color: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 14px;
+        padding: 1rem 1.2rem;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+    }
+
+    .metric-card-label {
+        font-size: 0.85rem;
+        color: #6B7280;
+        margin-bottom: 0.35rem;
+    }
+
+    .metric-card-value {
+        font-size: 1.35rem;
+        font-weight: 700;
+        color: #1F2937;
+    }
+
+    .tabela-artigo table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 0.8rem;
+        margin-bottom: 1.2rem;
+        font-size: 0.95rem;
+    }
+
+    .tabela-artigo th {
+        background-color: #F3F4F6;
+        color: #111827;
+        font-weight: 700;
+        text-align: center;
+        border: 1px solid #D1D5DB;
+        padding: 0.65rem;
+    }
+
+    .tabela-artigo td {
+        border: 1px solid #D1D5DB;
+        padding: 0.6rem;
+        text-align: center;
+        color: #111827;
+    }
+
+    .tabela-artigo .celula-modelo {
+        vertical-align: middle;
+        font-weight: 700;
+        background-color: #FFFFFF;
+    }
+
+    .tabela-artigo td:first-child,
+    .tabela-artigo td:nth-child(2) {
+        font-weight: 600;
+    }
+
+    .nota-metodologica {
+        background-color: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 14px;
+        padding: 1.2rem 1.4rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+    }
+
+    .nota-metodologica h4 {
+        margin-top: 0;
+        margin-bottom: 0.5rem;
+        color: #1F2937;
+        font-size: 1.05rem;
+    }
+
+    .nota-metodologica p {
+        color: #374151;
+        line-height: 1.65;
+        margin-bottom: 0;
+        text-align: justify;
+    }
+
+    .alerta-metodologico {
+        background-color: #FFF7E6;
+        border-left: 6px solid #E3A72F;
+        border-radius: 12px;
+        padding: 1rem 1.2rem;
+        margin: 1rem 0;
+        color: #374151;
+        line-height: 1.6;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -126,21 +226,109 @@ def formatar_numero(valor, casas: int = 4) -> str:
         return str(valor)
 
 
-def nome_variavel_texto(nome: str) -> str:
-    """
-    Converte o nome técnico da variável em texto mais legível para a interface.
-    Exemplo: taxa_distorcao_idade_serie -> Taxa distorcao idade serie.
-    """
-    texto = str(nome)
-    texto = texto.replace("_", " ")
-    texto = texto.replace("-", " - ")
-    texto = re.sub(r"\s+", " ", texto).strip()
-    if not texto:
-        return str(nome)
-    return texto[:1].upper() + texto[1:]
+# ======================================================
+# DICIONÁRIO DE RÓTULOS INTERPRETÁVEIS DAS VARIÁVEIS
+# Apenas variáveis presentes nos modelos finais do simulador
+# ======================================================
+
+import textwrap
+
+ROTULOS_VARIAVEIS = {
+    # Indicadores educacionais gerais
+    "taxa_distorcao_idade_serie": "Taxa de distorção idade-série",
+    "percentual_docente_curso_superior": "Percentual de docentes com curso superior",
+    "media_horas_aula": "Média de horas-aula diária",
+    "media_alunos_turma": "Média de alunos por turma",
+    "quantidade_de_matriculas": "Quantidade de matrículas",
+
+    # Adequação da formação docente
+    "grupo_1_adeq_form_docente": "Professores com formação superior adequada à área lecionada",
+    "grupo_2_adeq_form_docente": "Professores com bacharelado na disciplina, sem complementação pedagógica",
+    "grupo_3_adeq_form_docente": "Professores com formação superior em área diferente da que lecionam",
+    "grupo_5_adeq_form_docente": "Professores sem curso superior completo",
+
+    # Esforço docente
+    "nivel_3_esforco_docente": "Docentes em nível intermediário de esforço docente",
+    "nivel_4_esforco_docente": "Docentes em nível intermediário-alto de esforço docente",
+    "nivel_5_esforco_docente": "Docentes em nível elevado de esforço docente",
+
+    # Complexidade da gestão escolar
+    "nivel_1_gestao_escola": "Escolas com menor complexidade de gestão",
+    "nivel_2_gestao_escola": "Escolas com baixa complexidade de gestão",
+    "nivel_3_gestao_escola": "Escolas com complexidade intermediária de gestão",
+    "nivel_4_gestao_escola": "Escolas com complexidade intermediária-alta de gestão",
+    "nivel_5_gestao_escola": "Escolas com alta complexidade de gestão",
+
+    # Regularidade docente
+    "media_baixa_regularidade": "Média de docentes com baixa regularidade na escola",
+    "media_alta_regularidade": "Média de docentes com alta regularidade na escola",
+
+    # Infraestrutura escolar
+    "qt_salas_utiliza_climatizadas": "Quantidade de salas utilizadas climatizadas",
+    "qt_desktop_aluno": "Computadores desktop disponíveis para alunos",
+    "qt_escolas_com_agua_potavel": "Escolas com água potável",
+    "qt_escolas_com_acessibilidade_rampas": "Escolas com rampas de acessibilidade",
+    "qt_escolas_com_orgao_conselho_escolar": "Escolas com conselho escolar",
+
+    # Profissionais escolares
+    "qt_prof_pedagogia": "Profissionais de pedagogia",
+    "qt_prof_secretario": "Profissionais com função de secretário escolar",
+
+    # Variáveis econômicas
+    "pib_per_capita": "PIB per capita municipal",
+    "area_colhida_lavour": "Área colhida de lavouras",
+    "valor_da_producao_na_extracao_vegetal": "Valor da produção na extração vegetal",
+    "valor_da_producao_prod_origem_animal": "Valor da produção de origem animal",
+
+    # Receitas e transferências municipais
+    "iptu": "Arrecadação de IPTU",
+    "cota_parte_icms": "Cota-parte do ICMS",
+    "cota_parte_ipva": "Cota-parte do IPVA",
+    "cota_parte_ipi_exp": "Cota-parte do IPI-Exportação",
+    "pnate": "Transferências do PNATE",
+
+    # Fundeb e despesas educacionais
+    "valor_aplicado_em_mde": "Valor aplicado em manutenção e desenvolvimento do ensino",
+    "receita_da_aplicacao_financeira_do_fundeb": "Receita de aplicação financeira do Fundeb",
+    "receitas_destinadas_ao_fundeb_fundo_estadual": "Receitas destinadas ao Fundeb estadual",
+    "contribuicao_na_formacao_do_fundef_fundeb_–_destinada": "Contribuição destinada à formação do Fundef/Fundeb",
+    "creche": "Despesas associadas à creche",
+    "pre_escola": "Despesas associadas à pré-escola",
+
+    # Assistência social
+    "valor_repassado_crianca_feliz": "Repasses do Programa Criança Feliz",
+    "valor_repassado_protecao_social_basica": "Repasses à proteção social básica",
+    "valor_repassado_gestao_suas": "Repasses para gestão do SUAS",
+}
 
 
-def obter_coluna_existente(df: pd.DataFrame, candidatas: list[str]) -> str | None:
+def obter_rotulo_variavel(nome_variavel):
+    """
+    Retorna o rótulo interpretável da variável.
+    Caso a variável não esteja no dicionário, aplica uma formatação simples.
+    """
+    return ROTULOS_VARIAVEIS.get(
+        nome_variavel,
+        str(nome_variavel).replace("_", " ").strip().capitalize()
+    )
+
+
+def nome_variavel_texto(nome_variavel):
+    """
+    Função usada na interface do simulador para exibir nomes legíveis.
+    Mantém o mesmo padrão de rótulos adotado no artigo.
+    """
+    return obter_rotulo_variavel(nome_variavel)
+
+
+def quebrar_rotulo(texto, largura=48):
+    """
+    Quebra rótulos longos para melhorar a leitura em tabelas e gráficos.
+    """
+    return "\n".join(textwrap.wrap(str(texto), width=largura))
+
+
+def obter_coluna_existente(df: pd.DataFrame, candidatas: list):
     """Retorna a primeira coluna existente entre as candidatas informadas."""
     for coluna in candidatas:
         if coluna in df.columns:
@@ -168,7 +356,7 @@ def obter_coluna_municipio(df: pd.DataFrame) -> str:
     return "Município"
 
 
-def localizar_artefato(caminhos_possiveis: list[str]) -> str | None:
+def localizar_artefato(caminhos_possiveis: list):
     """Localiza o primeiro artefato existente entre os caminhos possíveis."""
     for caminho in caminhos_possiveis:
         if os.path.exists(caminho):
@@ -321,40 +509,233 @@ def aplicar_alteracoes_cenario(X_base: pd.DataFrame, alteracoes: list[dict]) -> 
     return X_cenario
 
 
-def criar_tabela_metricas_artefato(artefato: dict) -> pd.DataFrame:
-    """Cria uma tabela resumida com as métricas disponíveis no artefato."""
+def valor_disponivel(valor) -> bool:
+    """Verifica se um valor está disponível para exibição."""
+    try:
+        return valor is not None and not pd.isna(valor)
+    except Exception:
+        return False
+
+
+def formatar_media_desvio(media, desvio=None, casas: int = 4) -> str:
+    """Formata média e desvio-padrão no padrão de tabela acadêmica."""
+    if not valor_disponivel(media):
+        return "Não disponível"
+
+    media_formatada = formatar_numero(media, casas)
+
+    if valor_disponivel(desvio):
+        desvio_formatado = formatar_numero(desvio, casas)
+        return f"{media_formatada} ± {desvio_formatado}"
+
+    return media_formatada
+
+
+def obter_metrica_final(metricas_modelo_final, base: str, metrica: str):
+    """Recupera MAE, RMSE ou R² da tabela final de treino/teste."""
+    if not isinstance(metricas_modelo_final, pd.DataFrame):
+        return np.nan
+
+    if metricas_modelo_final.empty:
+        return np.nan
+
+    linha = metricas_modelo_final[
+        metricas_modelo_final["base"].astype(str).str.lower() == base.lower()
+    ]
+
+    if linha.empty:
+        return np.nan
+
+    return linha.iloc[0].get(metrica, np.nan)
+
+
+def criar_tabela_desempenho_modelo(artefato: dict) -> pd.DataFrame:
+    """
+    Cria tabela de desempenho no formato acadêmico:
+    Modelo | Métrica | Treino | Teste | Validação Cruzada Inicial | RepeatedKFold.
+    """
     modelo_final_escolhido = artefato.get("modelo_final_escolhido", {})
     metricas_modelo_final = artefato.get("metricas_modelo_final", None)
-    resultado_friedman = artefato.get("resultado_friedman", None)
+    resumo_repeated = artefato.get("resumo_repeated", None)
 
     if isinstance(modelo_final_escolhido, pd.Series):
         modelo_final_escolhido = modelo_final_escolhido.to_dict()
 
-    linhas = [
-        {"Indicador": "Modelo final", "Valor": artefato.get("nome_modelo", "Não disponível")},
-        {"Indicador": "Conjunto de variáveis", "Valor": artefato.get("nome_conjunto", "Não disponível")},
-        {"Indicador": "Número de variáveis", "Valor": len(artefato.get("variaveis_modelo", []))},
-        {"Indicador": "RMSE na validação cruzada inicial", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_cv"))},
-        {"Indicador": "R² na validação cruzada inicial", "Valor": formatar_numero(modelo_final_escolhido.get("R2_cv"))},
-        {"Indicador": "RMSE no teste", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_teste"))},
-        {"Indicador": "R² no teste", "Valor": formatar_numero(modelo_final_escolhido.get("R2_teste"))},
-        {"Indicador": "RMSE médio no RepeatedKFold", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_repeated_medio"))},
-        {"Indicador": "Desvio-padrão do RMSE no RepeatedKFold", "Valor": formatar_numero(modelo_final_escolhido.get("RMSE_repeated_desvio"))},
-        {"Indicador": "R² médio no RepeatedKFold", "Valor": formatar_numero(modelo_final_escolhido.get("R2_repeated_medio"))}
+    nome_modelo = artefato.get("nome_modelo", "Não disponível")
+
+    metricas = [
+        {
+            "codigo": "R2",
+            "rotulo": "R²",
+            "cv_media": "R2_cv",
+            "cv_desvio": "R2_cv_desvio",
+            "rep_media": "R2_repeated_medio",
+            "rep_desvio": None,
+        },
+        {
+            "codigo": "MAE",
+            "rotulo": "MAE",
+            "cv_media": "MAE_cv",
+            "cv_desvio": "MAE_cv_desvio",
+            "rep_media": "MAE_repeated_medio",
+            "rep_desvio": None,
+        },
+        {
+            "codigo": "RMSE",
+            "rotulo": "RMSE",
+            "cv_media": "RMSE_cv",
+            "cv_desvio": "RMSE_cv_desvio",
+            "rep_media": "RMSE_repeated_medio",
+            "rep_desvio": "RMSE_repeated_desvio",
+        },
     ]
 
-    if isinstance(metricas_modelo_final, pd.DataFrame) and not metricas_modelo_final.empty:
-        for _, linha in metricas_modelo_final.iterrows():
-            base = linha.get("base", "")
-            linhas.append({"Indicador": f"MAE final - {base}", "Valor": formatar_numero(linha.get("MAE"))})
-            linhas.append({"Indicador": f"RMSE final - {base}", "Valor": formatar_numero(linha.get("RMSE"))})
-            linhas.append({"Indicador": f"R² final - {base}", "Valor": formatar_numero(linha.get("R2"))})
+    repeated_disponivel = False
 
-    if isinstance(resultado_friedman, pd.DataFrame) and not resultado_friedman.empty:
-        linhas.append({"Indicador": "Teste de Friedman - p-valor", "Valor": formatar_numero(resultado_friedman.iloc[0].get("p_valor"), 8)})
-        linhas.append({"Indicador": "Teste de Friedman significativo a 5%", "Valor": str(resultado_friedman.iloc[0].get("significativo_5%"))})
+    if isinstance(resumo_repeated, pd.DataFrame) and not resumo_repeated.empty:
+        colunas_repeated = [
+            "RMSE_repeated_medio",
+            "MAE_repeated_medio",
+            "R2_repeated_medio"
+        ]
+
+        for coluna in colunas_repeated:
+            if coluna in resumo_repeated.columns and resumo_repeated[coluna].notna().any():
+                repeated_disponivel = True
+
+    linhas = []
+
+    for i, item in enumerate(metricas):
+        codigo = item["codigo"]
+
+        treino = obter_metrica_final(metricas_modelo_final, "Treino", codigo)
+        teste = obter_metrica_final(metricas_modelo_final, "Teste", codigo)
+
+        cv_media = modelo_final_escolhido.get(item["cv_media"], np.nan)
+        cv_desvio = modelo_final_escolhido.get(item["cv_desvio"], np.nan)
+
+        linha = {
+            "Modelo": nome_modelo if i == 0 else "",
+            "Métrica": item["rotulo"],
+            "Treino": formatar_numero(treino),
+            "Teste": formatar_numero(teste),
+            "Validação cruzada inicial": formatar_media_desvio(cv_media, cv_desvio),
+        }
+
+        if repeated_disponivel:
+            rep_media = modelo_final_escolhido.get(item["rep_media"], np.nan)
+            rep_desvio = modelo_final_escolhido.get(item["rep_desvio"], np.nan) if item["rep_desvio"] else np.nan
+            linha["RepeatedKFold"] = formatar_media_desvio(rep_media, rep_desvio)
+
+        linhas.append(linha)
 
     return pd.DataFrame(linhas)
+
+
+def renderizar_tabela_artigo(tabela: pd.DataFrame):
+    """Renderiza uma tabela com aparência mais próxima de tabela acadêmica."""
+    html = tabela.to_html(index=False, escape=False)
+
+    st.markdown(
+        f"""
+        <div class="tabela-artigo">
+            {html}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def renderizar_tabela_desempenho_artigo(tabela: pd.DataFrame):
+    """
+    Renderiza a tabela de desempenho com a coluna 'Modelo' mesclada
+    nas linhas das métricas R², MAE e RMSE.
+    """
+    if tabela.empty:
+        st.info("Não há métricas disponíveis para exibição.")
+        return
+
+    colunas = list(tabela.columns)
+    nome_modelo = tabela["Modelo"].replace("", np.nan).dropna().iloc[0]
+    numero_linhas = len(tabela)
+
+    html = """
+    <div class="tabela-artigo">
+        <table>
+            <thead>
+                <tr>
+    """
+
+    for coluna in colunas:
+        html += f"<th>{escape(str(coluna))}</th>"
+
+    html += """
+                </tr>
+            </thead>
+            <tbody>
+    """
+
+    for indice, (_, linha) in enumerate(tabela.iterrows()):
+        html += "<tr>"
+
+        if indice == 0:
+            html += (
+                f'<td rowspan="{numero_linhas}" class="celula-modelo">'
+                f"{escape(str(nome_modelo))}"
+                "</td>"
+            )
+
+        for coluna in colunas:
+            if coluna == "Modelo":
+                continue
+
+            html += f"<td>{escape(str(linha[coluna]))}</td>"
+
+        html += "</tr>"
+
+    html += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def renderizar_cartoes_modelo(artefato: dict):
+    """Exibe cartões sintéticos com as principais informações do modelo."""
+    modelo_final_escolhido = artefato.get("modelo_final_escolhido", {})
+
+    if isinstance(modelo_final_escolhido, pd.Series):
+        modelo_final_escolhido = modelo_final_escolhido.to_dict()
+
+    nome_modelo = artefato.get("nome_modelo", "Não disponível")
+    n_variaveis = len(artefato.get("variaveis_modelo", []))
+    rmse_teste = modelo_final_escolhido.get("RMSE_teste", np.nan)
+    r2_teste = modelo_final_escolhido.get("R2_teste", np.nan)
+
+    st.markdown(
+        f"""
+        <div class="metric-card-grid">
+            <div class="metric-card">
+                <div class="metric-card-label">Modelo final</div>
+                <div class="metric-card-value">{nome_modelo}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-card-label">Número de variáveis</div>
+                <div class="metric-card-value">{n_variaveis}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-card-label">RMSE no teste</div>
+                <div class="metric-card-value">{formatar_numero(rmse_teste)}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-card-label">R² no teste</div>
+                <div class="metric-card-value">{formatar_numero(r2_teste)}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # ============================================================
@@ -800,7 +1181,7 @@ with aba_municipios:
 # ============================================================
 
 with aba_metricas:
-    st.subheader("Métricas e informações do modelo")
+    st.subheader("Desempenho do modelo final")
 
     etapa_metricas = st.selectbox(
         "Selecione a etapa de ensino",
@@ -808,21 +1189,31 @@ with aba_metricas:
         key="etapa_metricas"
     )
 
-    artefato_metricas = carregar_artefato(ETAPAS_DISPONIVEIS[etapa_metricas]["artefato"])
-    tabela_metricas = criar_tabela_metricas_artefato(artefato_metricas)
-
-    st.dataframe(tabela_metricas, use_container_width=True)
-
-    st.caption(
-        "As métricas exibidas são aquelas armazenadas no artefato final do modelo, "
-        "exportado a partir do notebook metodológico do artigo."
+    artefato_metricas = carregar_artefato(
+        ETAPAS_DISPONIVEIS[etapa_metricas]["artefato"]
     )
 
+    renderizar_cartoes_modelo(artefato_metricas)
+
+    st.markdown("#### Tabela de desempenho preditivo")
+
+    tabela_desempenho = criar_tabela_desempenho_modelo(artefato_metricas)
+    renderizar_tabela_desempenho_artigo(tabela_desempenho)
+    st.markdown(
+        """
+        <div class="alerta-metodologico">
+        As métricas apresentadas correspondem ao artefato final carregado pela aplicação.
+        O conjunto de teste foi mantido separado durante o treinamento e a validação cruzada
+        foi calculada apenas sobre os dados de treino, conforme o procedimento metodológico
+        adotado no estudo.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 # ============================================================
 # ABA 5: NOTAS METODOLÓGICAS
 # ============================================================
-
 with aba_metodologia:
     st.subheader("Notas metodológicas da aplicação")
 
@@ -832,43 +1223,89 @@ with aba_metodologia:
         key="etapa_metodologia"
     )
 
-    artefato_metodologia = carregar_artefato(ETAPAS_DISPONIVEIS[etapa_metodologia]["artefato"])
+    artefato_metodologia = carregar_artefato(
+        ETAPAS_DISPONIVEIS[etapa_metodologia]["artefato"]
+    )
+
+    nome_modelo_metodologia = artefato_metodologia.get("nome_modelo", "Não disponível")
     variaveis_modelo_metodologia = artefato_metodologia["variaveis_modelo"]
+    n_variaveis_metodologia = len(variaveis_modelo_metodologia)
+
+    st.markdown(
+        f"""
+        <div class="nota-metodologica">
+            <h4>Escopo da aplicação</h4>
+            <p>
+            Esta aplicação operacionaliza o artefato computacional descrito no estudo,
+            permitindo a simulação exploratória de cenários associados ao IDEB municipal.
+            Para a etapa selecionada, o sistema utiliza o modelo final <strong>{nome_modelo_metodologia}</strong>,
+            treinado com <strong>{n_variaveis_metodologia}</strong> variáveis explicativas e
+            armazenado em artefato próprio para uso na interface web.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     st.markdown(
         """
-        Esta aplicação operacionaliza a simulação de cenários descrita no artigo.
-        O sistema utiliza o artefato final do modelo selecionado no processo metodológico,
-        preservando o pré-processamento aplicado no treinamento, incluindo imputação,
-        remoção de variáveis de variância zero e seleção do subconjunto final de variáveis.
-
-        A simulação é realizada sobre os registros de 2023. O usuário seleciona uma ou mais
-        variáveis explicativas, define percentuais de aumento ou redução e o sistema recalcula
-        o IDEB previsto pelo modelo para o novo cenário.
-
-        A diferença entre o IDEB previsto sem alteração e o IDEB previsto no cenário representa
-        uma variação estimada pelo modelo. Essa diferença não deve ser interpretada como efeito
-        causal, pois a aplicação não identifica mecanismos causais, não controla confundimento
-        por desenho causal e não estima efeitos de tratamento.
-        """
+        <div class="nota-metodologica">
+            <h4>Procedimento de simulação</h4>
+            <p>
+            A simulação é realizada sobre os registros observados de 2023. O usuário seleciona
+            uma ou mais variáveis explicativas, define a operação de aumento ou redução e informa
+            o percentual de modificação. Em seguida, a aplicação reaplica o mesmo pré-processamento
+            utilizado no treinamento, incluindo imputação por mediana, remoção de variáveis de
+            variância zero e seleção das variáveis efetivamente usadas pelo modelo final.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    st.markdown("### Variáveis disponíveis para simulação")
+    st.markdown(
+        """
+        <div class="nota-metodologica">
+            <h4>Interpretação dos resultados</h4>
+            <p>
+            A diferença entre o IDEB previsto sem alteração e o IDEB previsto no cenário simulado
+            representa uma resposta condicionada do modelo às alterações informadas. Essa diferença
+            deve ser interpretada como variação preditiva estimada, e não como efeito causal.
+            A aplicação não identifica mecanismos causais, não controla confundimento por desenho
+            experimental ou quase-experimental e não estima efeitos de tratamento.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="alerta-metodologico">
+        A ferramenta deve ser utilizada como apoio à análise exploratória e à formulação de hipóteses.
+        Os resultados não substituem avaliação educacional, análise institucional, leitura territorial
+        ou interpretação substantiva das políticas públicas envolvidas.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown("#### Variáveis disponíveis para simulação")
 
     tabela_variaveis = pd.DataFrame(
         {
-            "Variável exibida no simulador": [nome_variavel_texto(v) for v in variaveis_modelo_metodologia],
+            "Variável exibida no simulador": [
+                nome_variavel_texto(v) for v in variaveis_modelo_metodologia
+            ],
             "Nome técnico no artefato": variaveis_modelo_metodologia
         }
     )
 
-    st.dataframe(tabela_variaveis, use_container_width=True)
-
-    st.markdown(
-        """
-        A interpretação dos cenários deve considerar as limitações dos dados, a agregação
-        municipal, a qualidade das variáveis disponíveis e o fato de que modelos preditivos
-        capturam padrões estatísticos presentes na base, mas não substituem análise educacional,
-        institucional e territorial.
-        """
+ 
+    tabela_variaveis.insert(
+        0,
+        "Nº",
+        range(1, len(tabela_variaveis) + 1)
     )
+
+    renderizar_tabela_artigo(tabela_variaveis)

@@ -1,0 +1,12 @@
+﻿item,valor
+Modelo final,CatBoost
+Estratégia de seleção,Frequencia_2_ou_mais
+Número de variáveis,21
+MAE - teste territorial,0.397005
+RMSE - teste territorial,0.509293
+R² - teste territorial,0.515546
+Municípios no teste territorial,45
+Observações no teste territorial,260
+MAE - validação temporal 2023,0.454248
+RMSE - validação temporal 2023,0.572766
+R² - validação temporal 2023,0.288246

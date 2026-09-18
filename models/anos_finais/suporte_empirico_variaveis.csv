@@ -1,0 +1,24 @@
+﻿variavel,rotulo,n_validos,n_ausentes,min,p01,p05,mediana,p95,p99,max
+qt_salas_utiliza_climatizadas,Quantidade de salas utilizadas climatizadas,1271,0,0.0,0.0,0.0,0.0,126.0,433.1999999999998,11820.0
+qt_prof_pedagogia,Profissionais de pedagogia,1271,0,0.0,0.0,0.0,0.0,64.0,211.59999999999764,355764.0
+qt_prof_secretario,Profissionais com função de secretário escolar,1271,0,0.0,0.0,0.0,0.0,42.5,101.19999999999982,88914.0
+qt_escolas_com_agua_potavel,Escolas com água potável,1271,0,0.0,0.0,0.0,1.0,64.0,178.39999999999964,1860.0
+media_alunos_turma,Média de alunos por turma,1271,0,8.9,13.2,15.850000000000001,22.3,29.25,31.829999999999995,35.3
+media_horas_aula,Média de horas-aula diária,1271,0,3.6,3.9,4.0,4.5,7.95,9.35999999999999,10.6
+percentual_docente_curso_superior,Percentual de docentes com curso superior,1271,0,24.0,40.31,54.1,87.5,100.0,100.0,100.0
+pib_per_capita,PIB per capita municipal,1271,0,3790.21,4299.664,4824.67,8609.38,27291.190000000002,74026.10899999997,200215.82
+taxa_distorcao_idade_serie,Taxa de distorção idade-série,1271,0,0.0,7.17,15.7,37.9,57.9,64.04999999999998,70.4
+grupo_2_adeq_form_docente,"Professores com bacharelado na disciplina, sem complementação pedagógica",1271,0,0.0,0.0,0.0,0.0,3.1,7.7,11.5
+grupo_3_adeq_form_docente,Professores com formação superior em área diferente da que lecionam,1271,0,0.9,13.71,22.700000000000003,42.8,64.7,75.53999999999996,88.1
+valor_da_producao_prod_origem_animal,Valor da produção de origem animal,1271,0,26.0,116.60000000000001,184.5,725.0,4319.5,15411.799999999988,44768.0
+area_colhida_lavour,Área colhida de lavouras,1270,1,8.0,257.0,514.9,2026.5,22291.549999999963,130913.7799999996,383157.0
+valor_da_producao_na_extracao_vegetal,Valor da produção na extração vegetal,1271,0,3.0,13.0,29.5,315.0,3936.5,7059.999999999991,21980.0
+media_alta_regularidade,Média de docentes com alta regularidade na escola,1271,0,0.0,0.0,11.149999999999999,41.9,75.0,87.5,100.0
+nivel_4_esforco_docente,Docentes em nível intermediário-alto de esforço docente,1271,0,0.0,7.61,14.6,35.3,57.75,65.63,86.7
+nivel_5_esforco_docente,Docentes em nível elevado de esforço docente,1271,0,0.0,0.0,0.0,8.8,22.55,31.389999999999986,53.8
+nivel_6_esforco_docente,Docentes em nível máximo de esforço docente,1271,0,0.0,0.0,0.0,5.7,15.850000000000001,22.319999999999983,41.7
+nivel_4_gestao_escola,Escolas com complexidade intermediária-alta de gestão,1271,0,0.0,0.0,0.0,11.7,41.2,60.0,75.0
+valor_repassado_crianca_feliz,Repasses do Programa Criança Feliz,1271,0,0.0,0.0,0.0,49778.0,178944.0,316536.35999999795,1543127.0
+iptu,Arrecadação de IPTU,1269,2,0.0,0.0,100.0,5412.39,430851.12399999815,2404927.02399999,141352685.04
+pnate,Transferências do PNATE,1269,2,0.0,0.0,0.0,68375.29,287858.336,555417.2599999992,1276647.06
+receita_da_aplicacao_financeira_do_fundeb,Receita de aplicação financeira do Fundeb,1269,2,0.0,0.0,0.0,6155.25,109933.11399999996,391029.3047999974,1946345.96

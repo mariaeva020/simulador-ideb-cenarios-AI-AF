@@ -1,25 +1,42 @@
-# Ambientes virtuais
+# ============================================================
+# AMBIENTES VIRTUAIS
+# ============================================================
 .venv/
 venv/
 env/
 ENV/
 
-# Arquivos Python temporários
+
+# ============================================================
+# ARQUIVOS PYTHON TEMPORÁRIOS
+# ============================================================
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Jupyter / Colab
+
+# ============================================================
+# JUPYTER / COLAB
+# ============================================================
 .ipynb_checkpoints/
 
-# Streamlit
+
+# ============================================================
+# STREAMLIT E SEGREDOS
+# ============================================================
 .streamlit/secrets.toml
 
-# Variáveis de ambiente e arquivos locais
+
+# ============================================================
+# VARIÁVEIS DE AMBIENTE E ARQUIVOS LOCAIS
+# ============================================================
 .env
 .env.*
 
-# Logs e arquivos temporários
+
+# ============================================================
+# LOGS E ARQUIVOS TEMPORÁRIOS
+# ============================================================
 *.log
 *.tmp
 *.bak
@@ -27,14 +44,48 @@ __pycache__/
 Thumbs.db
 catboost_info/
 
-# Saídas geradas pela aplicação
+
+# ============================================================
+# PASTAS TEMPORÁRIAS EXPORTADAS PELOS COLABS
+# ============================================================
+# Essas pastas são usadas apenas como entrada temporária para o script
+# gerar_artefatos_modelos_finais_por_etapa.py.
+# Os arquivos efetivamente utilizados pelo simulador ficam em data/ e models/.
+artefatos_anos_iniciais/
+artefatos_anos_finais/
+
+
+# ============================================================
+# SAÍDAS GERADAS LOCALMENTE
+# ============================================================
+# Resultados de auditoria e arquivos exportados durante a execução
+# podem ser regenerados a partir dos artefatos versionados.
 outputs/
 exports/
-*.csv
 
-# Bases e modelos podem ser sensíveis ou grandes.
-# Descomente as linhas abaixo se o repositório não deve armazenar dados/modelos.
-# data/*.xlsx
-# data/*.csv
-# models/*.pkl
-# *.pkl
+
+# ============================================================
+# ARQUIVOS QUE DEVEM SER VERSIONADOS
+# ============================================================
+# Não ignorar genericamente *.csv, *.joblib ou models/.
+# O simulador depende de arquivos CSV em data/ e models/, além dos
+# artefatos .joblib dos modelos de implantação.
+#
+# Devem permanecer versionados, entre outros:
+# data/base_referencia_2023_anos_iniciais.csv
+# data/base_referencia_2023_anos_finais.csv
+# models/anos_iniciais/*.joblib
+# models/anos_iniciais/*.json
+# models/anos_iniciais/*.csv
+# models/anos_finais/*.joblib
+# models/anos_finais/*.json
+# models/anos_finais/*.csv
+
+
+# ============================================================
+# ARTEFATOS ANTIGOS DO PIPELINE ANTERIOR
+# ============================================================
+# O fluxo atual não utiliza mais artefatos monolíticos .pkl.
+# Caso ainda existam arquivos antigos na raiz de models/, eles não devem
+# ser adicionados novamente ao repositório.
+models/artefato_modelo_final_*.pkl

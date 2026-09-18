@@ -1,0 +1,12 @@
+﻿item,valor
+Modelo final,XGBoost
+Estratégia de seleção,SHAP Top-30
+Número de variáveis,30
+MAE - teste territorial,0.50351
+RMSE - teste territorial,0.647659
+R² - teste territorial,0.495757
+Municípios no teste territorial,45
+Observações no teste territorial,256
+MAE - validação temporal 2023,0.593858
+RMSE - validação temporal 2023,0.735374
+R² - validação temporal 2023,0.299419

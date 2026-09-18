@@ -1,546 +1,723 @@
 # -*- coding: utf-8 -*-
 """
-GERAR ARTEFATOS DOS MODELOS FINAIS POR ETAPA
-============================================
+ORGANIZAÇÃO DOS ARTEFATOS FINAIS POR ETAPA PARA O SIMULADOR
+============================================================
 
-Este script gera os artefatos .pkl usados pelo simulador Streamlit, sem refazer
-VIF, LassoCV, SHAP, Boruta, estabilidade, ranking multicritério, Friedman ou
-Wilcoxon.
+Este script NÃO treina modelos e NÃO refaz a seleção de variáveis.
 
-Ele replica o tratamento de modelagem do script metodológico completo:
-1) lê a base por etapa;
-2) remove registros com IDEB ausente;
-3) define X e y removendo IDEB e colunas de identificação;
-4) mantém apenas preditores numéricos;
-5) separa treino e teste em 80/20 com random_state=42;
-6) ajusta a imputação por mediana apenas no treino e aplica ao teste;
-7) ajusta a remoção de variância zero apenas no treino e aplica ao teste;
-8) usa diretamente as variáveis finais já definidas para cada etapa;
-9) treina o modelo final correto de cada etapa;
-10) salva o artefato completo com modelo, imputador, seletor de variância,
-    variáveis e métricas.
+A fonte metodológica dos modelos é constituída pelos notebooks finais do artigo:
+- Anos Iniciais: XGBoost, com estratégia SHAP Top-30;
+- Anos Finais: CatBoost, com estratégia Frequencia_2_ou_mais.
 
-Modelos finais considerados:
-- Anos Iniciais: CatBoost | SHAP
-- Anos Finais: EBM | SHAP
+Depois de encerrada a avaliação científica, os próprios notebooks reajustam
+os modelos de implantação com todos os dados disponíveis de 2013 a 2023 e
+exportam os componentes necessários ao simulador.
 
+Função deste script:
+1. localizar as pastas exportadas pelos dois notebooks;
+2. validar os arquivos necessários;
+3. conferir a coerência mínima dos metadados;
+4. testar o pipeline de predição de implantação;
+5. copiar os componentes operacionais para models/<etapa>/;
+6. copiar a base de referência de 2023 para data/;
+7. gerar um resumo auditável da integração em outputs/.
 
+Uso esperado
+------------
+Coloque, temporariamente, na raiz do projeto:
+
+simulador_ideb/
+├── artefatos_anos_iniciais/
+├── artefatos_anos_finais/
+├── app.py
+├── data/
+├── models/
+├── outputs/
+└── gerar_artefatos_modelos_finais_por_etapa.py
+
+Depois execute:
+
+    python gerar_artefatos_modelos_finais_por_etapa.py
+
+Ao final, o simulador utilizará:
+
+data/
+├── base_referencia_2023_anos_iniciais.csv
+└── base_referencia_2023_anos_finais.csv
+
+models/
+├── anos_iniciais/
+└── anos_finais/
+
+IMPORTANTE
+----------
+As métricas do artigo pertencem ao modelo de avaliação científica.
+O modelo usado pelo simulador é o modelo de implantação reajustado após o
+encerramento da avaliação independente. Este script preserva essa separação.
 """
 
+from __future__ import annotations
+
+import hashlib
+import json
 import os
-import warnings
-from typing import Any, Dict, List, Tuple
+import shutil
+from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
-
-from catboost import CatBoostRegressor
-from interpret.glassbox import ExplainableBoostingRegressor
-from sklearn.feature_selection import VarianceThreshold
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import KFold, cross_validate, train_test_split
-
-warnings.filterwarnings("ignore")
 
 
 # ============================================================
 # CONFIGURAÇÕES GERAIS
 # ============================================================
 
-SEED = 42
-TEST_SIZE = 0.20
+PASTA_DADOS = Path("data")
+PASTA_MODELOS = Path("models")
+PASTA_OUTPUTS = Path("outputs")
 
-PASTA_DADOS = "data"
-PASTA_MODELOS = "models"
-PASTA_OUTPUTS = "outputs"
-
-os.makedirs(PASTA_MODELOS, exist_ok=True)
-os.makedirs(PASTA_OUTPUTS, exist_ok=True)
+PASTA_DADOS.mkdir(parents=True, exist_ok=True)
+PASTA_MODELOS.mkdir(parents=True, exist_ok=True)
+PASTA_OUTPUTS.mkdir(parents=True, exist_ok=True)
 
 
 CONFIG_ETAPAS = {
     "anos_iniciais": {
         "nome_etapa": "Anos Iniciais",
-        "arquivo_base": os.path.join(PASTA_DADOS, "base_anos_iniciais.xlsx"),
-        "arquivo_saida": os.path.join(PASTA_MODELOS, "artefato_modelo_final_anos_iniciais.pkl"),
+        "pasta_origem": Path("artefatos_anos_iniciais"),
+        "pasta_destino_modelo": PASTA_MODELOS / "anos_iniciais",
+        "arquivo_destino_base": (
+            PASTA_DADOS / "base_referencia_2023_anos_iniciais.csv"
+        ),
+        "modelo_esperado": "XGBoost",
+        "n_variaveis_avaliacao_esperado": 30,
+        "n_variaveis_implantacao_esperado": 30,
     },
     "anos_finais": {
         "nome_etapa": "Anos Finais",
-        "arquivo_base": os.path.join(PASTA_DADOS, "base_anos_finais.xlsx"),
-        "arquivo_saida": os.path.join(PASTA_MODELOS, "artefato_modelo_final_anos_finais.pkl"),
+        "pasta_origem": Path("artefatos_anos_finais"),
+        "pasta_destino_modelo": PASTA_MODELOS / "anos_finais",
+        "arquivo_destino_base": (
+            PASTA_DADOS / "base_referencia_2023_anos_finais.csv"
+        ),
+        "modelo_esperado": "CatBoost",
+        "n_variaveis_avaliacao_esperado": 21,
+        "n_variaveis_implantacao_esperado": 23,
     },
 }
 
 
-COLUNAS_IDENTIFICACAO = [
-    "ano",
-    "cod_municipio",
-    "nome_do_municipio",
-    "nome_municipio",
+# Arquivos realmente necessários para a aplicação Streamlit.
+ARQUIVOS_MODELO_SIMULADOR = [
+    "modelo_implantacao.joblib",
+    "imputador_implantacao.joblib",
+    "seletor_variancia_implantacao.joblib",
+    "variaveis_pos_variancia.joblib",
+    "variaveis_modelo.joblib",
+    "colunas_entrada_modelo.joblib",
+    "metadados.json",
+    "resumo_tecnico_modelo_final.csv",
+    "suporte_empirico_variaveis.csv",
 ]
 
-
-# ============================================================
-# MODELOS E VARIÁVEIS FINAIS POR ETAPA
-# ============================================================
-
-CONFIG_MODELOS_FINAIS = {
-    "anos_iniciais": {
-        "nome_modelo": "CatBoost",
-        "nome_conjunto": "SHAP",
-        "variaveis": [
-            "taxa_distorcao_idade_serie",
-            "grupo_5_adeq_form_docente",
-            "percentual_docente_curso_superior",
-            "valor_repassado_crianca_feliz",
-            "grupo_1_adeq_form_docente",
-            "pib_per_capita",
-            "iptu",
-            "cota_parte_ipva",
-            "valor_aplicado_em_mde",
-            "nivel_3_esforco_docente",
-            "valor_da_producao_na_extracao_vegetal",
-            "creche",
-            "cota_parte_ipi_exp",
-            "receita_da_aplicacao_financeira_do_fundeb",
-            "contribuicao_na_formacao_do_fundef_fundeb_–_destinada",
-            "nivel_1_gestao_escola",
-            "valor_repassado_protecao_social_basica",
-            "cota_parte_icms",
-            "area_colhida_lavour",
-            "nivel_5_gestao_escola",
-            "pre_escola",
-            "receitas_destinadas_ao_fundeb_fundo_estadual",
-            "nivel_3_gestao_escola",
-            "quantidade_de_matriculas",
-            "valor_repassado_gestao_suas",
-            "qt_salas_utiliza_climatizadas",
-            "media_alunos_turma",
-            "nivel_4_gestao_escola",
-            "nivel_5_esforco_docente",
-            "media_baixa_regularidade",
-        ],
-    },
-    "anos_finais": {
-        "nome_modelo": "EBM",
-        "nome_conjunto": "SHAP",
-        "variaveis": [
-            "taxa_distorcao_idade_serie",
-            "qt_salas_utiliza_climatizadas",
-            "qt_prof_secretario",
-            "qt_escolas_com_agua_potavel",
-            "qt_prof_pedagogia",
-            "receita_da_aplicacao_financeira_do_fundeb",
-            "qt_escolas_com_orgao_conselho_escolar",
-            "pib_per_capita",
-            "area_colhida_lavour",
-            "grupo_5_adeq_form_docente",
-            "iptu",
-            "valor_da_producao_na_extracao_vegetal",
-            "percentual_docente_curso_superior",
-            "valor_repassado_crianca_feliz",
-            "media_alta_regularidade",
-            "pnate",
-            "qt_escolas_com_acessibilidade_rampas",
-            "grupo_3_adeq_form_docente",
-            "valor_repassado_protecao_social_basica",
-            "grupo_1_adeq_form_docente",
-            "nivel_2_gestao_escola",
-            "nivel_5_esforco_docente",
-            "nivel_4_esforco_docente",
-            "qt_desktop_aluno",
-            "media_horas_aula",
-            "valor_da_producao_prod_origem_animal",
-            "grupo_2_adeq_form_docente",
-            "creche",
-            "nivel_4_gestao_escola",
-            "nivel_3_gestao_escola",
-        ],
-    },
-}
+ARQUIVO_BASE_REFERENCIA = "base_referencia_2023.csv"
 
 
 # ============================================================
 # FUNÇÕES AUXILIARES
 # ============================================================
 
+def calcular_sha256(caminho: Path) -> str:
+    """Calcula SHA-256 de um arquivo para auditoria."""
+    hash_obj = hashlib.sha256()
 
-def validar_configuracoes() -> None:
-    """Confere se cada etapa possui 30 variáveis e sem duplicidade."""
-    for chave_etapa, config in CONFIG_MODELOS_FINAIS.items():
-        variaveis = config["variaveis"]
+    with caminho.open("rb") as arquivo:
+        for bloco in iter(lambda: arquivo.read(1024 * 1024), b""):
+            hash_obj.update(bloco)
 
-        if len(variaveis) != 30:
-            raise ValueError(
-                f"A etapa {chave_etapa} possui {len(variaveis)} variáveis. "
-                "O esperado é exatamente 30 variáveis."
-            )
-
-        duplicadas = pd.Series(variaveis)[pd.Series(variaveis).duplicated()].tolist()
-        if duplicadas:
-            raise ValueError(
-                f"A etapa {chave_etapa} possui variáveis duplicadas: {duplicadas}"
-            )
+    return hash_obj.hexdigest()
 
 
-def criar_modelo_final(nome_modelo: str):
-    """Cria o modelo final correspondente à etapa."""
-    if nome_modelo == "CatBoost":
-        return CatBoostRegressor(
-            iterations=500,
-            learning_rate=0.03,
-            depth=4,
-            l2_leaf_reg=10,
-            loss_function="RMSE",
-            random_seed=SEED,
-            verbose=False,
-            allow_writing_files=False,
+def carregar_json(caminho: Path) -> dict[str, Any]:
+    """Carrega arquivo JSON em UTF-8."""
+    with caminho.open("r", encoding="utf-8") as arquivo:
+        return json.load(arquivo)
+
+
+def obter_valor_metadado(
+    metadados: dict[str, Any],
+    *chaves: str,
+) -> Any:
+    """Retorna o primeiro valor existente entre chaves alternativas."""
+    for chave in chaves:
+        if chave in metadados:
+            return metadados[chave]
+
+    return None
+
+
+def validar_arquivos_origem(
+    chave_etapa: str,
+    config: dict[str, Any],
+) -> None:
+    """Confere se a pasta exportada pelo notebook possui os arquivos exigidos."""
+    pasta_origem = config["pasta_origem"]
+
+    if not pasta_origem.exists():
+        raise FileNotFoundError(
+            f"Pasta de origem não encontrada para {config['nome_etapa']}: "
+            f"{pasta_origem.resolve()}\n"
+            "Baixe a pasta de artefatos gerada pelo respectivo notebook e "
+            "coloque-a na raiz do projeto."
         )
 
-    if nome_modelo == "EBM":
-        return ExplainableBoostingRegressor(
-            random_state=SEED,
-            interactions=10,
-        )
-
-    raise ValueError(f"Modelo não configurado: {nome_modelo}")
-
-
-def identificar_coluna_ideb(df: pd.DataFrame) -> str:
-    """Identifica a coluna da variável-alvo IDEB."""
-    candidatas = ["ideb", "IDEB", "Ideb"]
-
-    for coluna in candidatas:
-        if coluna in df.columns:
-            return coluna
-
-    raise ValueError(
-        "A variável-alvo IDEB não foi encontrada. "
-        "Verifique se a coluna se chama 'ideb', 'IDEB' ou 'Ideb'."
+    arquivos_necessarios = (
+        ARQUIVOS_MODELO_SIMULADOR
+        + [ARQUIVO_BASE_REFERENCIA]
     )
 
-
-def calcular_rmse(y_real, y_pred) -> float:
-    """Calcula a raiz do erro quadrático médio."""
-    return float(np.sqrt(mean_squared_error(y_real, y_pred)))
-
-
-def preparar_base_modelagem(
-    df_original: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame, str]:
-    """
-    Replica a preparação de modelagem do script completo.
-
-    Retorna:
-    - X: matriz de preditores numéricos;
-    - y: variável-alvo;
-    - df_modelagem: base após remoção de IDEB ausente;
-    - coluna_ideb: nome da coluna alvo.
-    """
-    df = df_original.copy()
-    coluna_ideb = identificar_coluna_ideb(df)
-
-    linhas_antes = df.shape[0]
-    df_modelagem = df[df[coluna_ideb].notnull()].copy()
-    linhas_depois = df_modelagem.shape[0]
-
-    print("Linhas antes da remoção de IDEB ausente:", linhas_antes)
-    print("Linhas após a remoção de IDEB ausente:", linhas_depois)
-    print("Registros removidos:", linhas_antes - linhas_depois)
-
-    colunas_remover = [coluna_ideb] + COLUNAS_IDENTIFICACAO
-    colunas_remover = [col for col in colunas_remover if col in df_modelagem.columns]
-
-    X = df_modelagem.drop(columns=colunas_remover, errors="ignore")
-    y = df_modelagem[coluna_ideb]
-
-    X = X.select_dtypes(include=[np.number])
-
-    print("Total de variáveis candidatas em X:", X.shape[1])
-    print("Total de registros em y:", y.shape[0])
-    print("Valores ausentes em y:", y.isna().sum())
-    print("Valores ausentes em X antes da divisão:", X.isna().sum().sum())
-
-    return X, y, df_modelagem, coluna_ideb
-
-
-def treinar_e_salvar_artefato(chave_etapa: str, config_etapa: Dict[str, Any]) -> Dict[str, Any]:
-    """Treina o modelo final da etapa e salva o respectivo artefato."""
-    print("\n" + "=" * 90)
-    print(f"PROCESSANDO: {config_etapa['nome_etapa'].upper()}")
-    print("=" * 90)
-
-    config_modelo = CONFIG_MODELOS_FINAIS[chave_etapa]
-
-    nome_modelo = config_modelo["nome_modelo"]
-    nome_conjunto = config_modelo["nome_conjunto"]
-    variaveis_modelo = config_modelo["variaveis"]
-
-    arquivo_base = config_etapa["arquivo_base"]
-    arquivo_saida = config_etapa["arquivo_saida"]
-
-    if not os.path.exists(arquivo_base):
-        raise FileNotFoundError(f"Base não encontrada: {arquivo_base}")
-
-    df_original = pd.read_excel(arquivo_base)
-    print("Base carregada:", arquivo_base)
-    print("Dimensão original:", df_original.shape)
-
-    # 1. Prepara X/y exatamente como no script completo.
-    X, y, df_modelagem, coluna_ideb = preparar_base_modelagem(df_original)
-
-    # 2. Usa as variáveis finais já definidas para a etapa.
-    print(f"\nModelo final da etapa: {nome_modelo}")
-    print(f"Conjunto final da etapa: {nome_conjunto}")
-    print("\nVariáveis finais definidas no script:")
-    for i, var in enumerate(variaveis_modelo, start=1):
-        print(f"{i:02d}. {var}")
-
-    variaveis_ausentes_em_x = [var for var in variaveis_modelo if var not in X.columns]
-    if variaveis_ausentes_em_x:
-        raise ValueError(
-            "As seguintes variáveis finais não foram encontradas em X. "
-            "Confira se os nomes estão exatamente iguais aos nomes da base:\n"
-            f"{variaveis_ausentes_em_x}"
-        )
-
-    # 3. Divide treino e teste 80/20, como no script completo.
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=TEST_SIZE,
-        random_state=SEED,
-    )
-
-    # 4. Imputação por mediana aprendida apenas no treino.
-    imputador = SimpleImputer(strategy="median")
-
-    X_train_imp_array = imputador.fit_transform(X_train)
-    X_test_imp_array = imputador.transform(X_test)
-
-    X_train_imp = pd.DataFrame(
-        X_train_imp_array,
-        columns=X_train.columns,
-        index=X_train.index,
-    )
-
-    X_test_imp = pd.DataFrame(
-        X_test_imp_array,
-        columns=X_test.columns,
-        index=X_test.index,
-    )
-
-    print("\nValores ausentes em X_train_imp:", X_train_imp.isna().sum().sum())
-    print("Valores ausentes em X_test_imp:", X_test_imp.isna().sum().sum())
-
-    # 5. Remoção de variância zero aprendida apenas no treino.
-    seletor_variancia = VarianceThreshold(threshold=0)
-
-    X_train_var_array = seletor_variancia.fit_transform(X_train_imp)
-    X_test_var_array = seletor_variancia.transform(X_test_imp)
-
-    variaveis_pos_variancia = X_train_imp.columns[
-        seletor_variancia.get_support()
-    ].tolist()
-
-    X_train_var = pd.DataFrame(
-        X_train_var_array,
-        columns=variaveis_pos_variancia,
-        index=X_train_imp.index,
-    )
-
-    X_test_var = pd.DataFrame(
-        X_test_var_array,
-        columns=variaveis_pos_variancia,
-        index=X_test_imp.index,
-    )
-
-    print("Variáveis após remoção de variância zero:", len(variaveis_pos_variancia))
-
-    variaveis_removidas_por_variancia = [
-        var for var in variaveis_modelo
-        if var not in variaveis_pos_variancia
+    ausentes = [
+        arquivo
+        for arquivo in arquivos_necessarios
+        if not (pasta_origem / arquivo).exists()
     ]
 
-    if variaveis_removidas_por_variancia:
-        raise ValueError(
-            "Alguma(s) variável(is) final(is) foi(ram) removida(s) por "
-            "variância zero no treino. Isso indica inconsistência entre a base "
-            "e as variáveis fixas do modelo:\n"
-            f"{variaveis_removidas_por_variancia}"
+    if ausentes:
+        raise FileNotFoundError(
+            f"Arquivos ausentes em {pasta_origem} para {chave_etapa}:\n"
+            + "\n".join(f"- {arquivo}" for arquivo in ausentes)
         )
 
-    X_train_final = X_train_var[variaveis_modelo].copy()
-    X_test_final = X_test_var[variaveis_modelo].copy()
 
-    # 6. Treina o modelo final correto da etapa.
-    modelo_final = criar_modelo_final(nome_modelo)
-    modelo_final.fit(X_train_final, y_train)
-
-    y_pred_train = modelo_final.predict(X_train_final)
-    y_pred_test = modelo_final.predict(X_test_final)
-
-    mae_treino = mean_absolute_error(y_train, y_pred_train)
-    rmse_treino = calcular_rmse(y_train, y_pred_train)
-    r2_treino = r2_score(y_train, y_pred_train)
-
-    mae_teste = mean_absolute_error(y_test, y_pred_test)
-    rmse_teste = calcular_rmse(y_test, y_pred_test)
-    r2_teste = r2_score(y_test, y_pred_test)
-
-    metricas_modelo_final = pd.DataFrame({
-        "base": ["Treino", "Teste"],
-        "MAE": [mae_treino, mae_teste],
-        "RMSE": [rmse_treino, rmse_teste],
-        "R2": [r2_treino, r2_teste],
-    })
-
-    # 7. Validação cruzada simples 5-fold no treino, como resumo operacional.
-    cv = KFold(
-        n_splits=5,
-        shuffle=True,
-        random_state=SEED,
+def validar_metadados(
+    config: dict[str, Any],
+    metadados: dict[str, Any],
+    variaveis_modelo: list[str],
+) -> dict[str, Any]:
+    """Valida modelo e quantidades registradas no pipeline final."""
+    modelo = obter_valor_metadado(
+        metadados,
+        "modelo",
+        "nome_modelo",
     )
 
-    scoring = {
-        "MAE": "neg_mean_absolute_error",
-        "MSE": "neg_mean_squared_error",
-        "R2": "r2",
-    }
-
-    resultados_cv = cross_validate(
-        estimator=criar_modelo_final(nome_modelo),
-        X=X_train_final,
-        y=y_train,
-        cv=cv,
-        scoring=scoring,
-        n_jobs=1,
-        return_train_score=False,
-        error_score=np.nan,
+    n_avaliacao = obter_valor_metadado(
+        metadados,
+        "n_variaveis_modelo_avaliacao",
     )
 
-    mae_cv_folds = -resultados_cv["test_MAE"]
-    rmse_cv_folds = np.sqrt(-resultados_cv["test_MSE"])
-    r2_cv_folds = resultados_cv["test_R2"]
+    n_implantacao = obter_valor_metadado(
+        metadados,
+        "n_variaveis_modelo_implantacao",
+    )
 
-    mae_cv = float(np.nanmean(mae_cv_folds))
-    rmse_cv = float(np.nanmean(rmse_cv_folds))
-    r2_cv = float(np.nanmean(r2_cv_folds))
+    if modelo != config["modelo_esperado"]:
+        raise ValueError(
+            f"Modelo incompatível em {config['nome_etapa']}. "
+            f"Esperado: {config['modelo_esperado']}. Encontrado: {modelo}."
+        )
 
-    mae_cv_desvio = float(np.nanstd(mae_cv_folds))
-    rmse_cv_desvio = float(np.nanstd(rmse_cv_folds))
-    r2_cv_desvio = float(np.nanstd(r2_cv_folds))
+    if (
+        n_avaliacao is not None
+        and int(n_avaliacao)
+        != int(config["n_variaveis_avaliacao_esperado"])
+    ):
+        raise ValueError(
+            f"Número de variáveis do modelo de avaliação incompatível em "
+            f"{config['nome_etapa']}. Esperado: "
+            f"{config['n_variaveis_avaliacao_esperado']}. "
+            f"Encontrado: {n_avaliacao}."
+        )
 
-    modelo_final_escolhido = {
-        "conjunto": nome_conjunto,
-        "modelo": nome_modelo,
-        "modelo_conjunto": f"{nome_modelo} | {nome_conjunto}",
-        "n_variaveis": len(variaveis_modelo),
-        "MAE_treino": mae_treino,
-        "RMSE_treino": rmse_treino,
-        "R2_treino": r2_treino,
-        "MAE_cv": mae_cv,
-        "MAE_cv_desvio": mae_cv_desvio,
-        "RMSE_cv": rmse_cv,
-        "RMSE_cv_desvio": rmse_cv_desvio,
-        "R2_cv": r2_cv,
-        "R2_cv_desvio": r2_cv_desvio,
-        "MAE_teste": mae_teste,
-        "RMSE_teste": rmse_teste,
-        "R2_teste": r2_teste,
-        "gap_R2_treino_cv": r2_treino - r2_cv,
-        "gap_R2_treino_teste": r2_treino - r2_teste,
-        "gap_RMSE_cv_teste": rmse_teste - rmse_cv,
-        "RMSE_repeated_medio": np.nan,
-        "RMSE_repeated_desvio": np.nan,
-        "R2_repeated_medio": np.nan,
-    }
+    if (
+        n_implantacao is not None
+        and int(n_implantacao)
+        != int(config["n_variaveis_implantacao_esperado"])
+    ):
+        raise ValueError(
+            f"Número de variáveis do modelo de implantação incompatível em "
+            f"{config['nome_etapa']}. Esperado: "
+            f"{config['n_variaveis_implantacao_esperado']}. "
+            f"Encontrado: {n_implantacao}."
+        )
 
-    ranking_modelos_geral = pd.DataFrame([modelo_final_escolhido])
-
-    resumo_repeated = pd.DataFrame({
-        "modelo_conjunto": [f"{nome_modelo} | {nome_conjunto}"],
-        "RMSE_repeated_medio": [np.nan],
-        "RMSE_repeated_desvio": [np.nan],
-        "MAE_repeated_medio": [np.nan],
-        "R2_repeated_medio": [np.nan],
-        "n_variaveis": [len(variaveis_modelo)],
-    })
-
-    resultado_friedman = pd.DataFrame({
-        "teste": ["Friedman"],
-        "base_comparacao": ["não reexecutado no script operacional"],
-        "estatistica": [np.nan],
-        "p_valor": [np.nan],
-        "significativo_5%": [np.nan],
-    })
-
-    resultados_wilcoxon = pd.DataFrame(columns=[
-        "modelo_a",
-        "modelo_b",
-        "estatistica",
-        "p_valor",
-        "p_valor_corrigido_holm",
-        "diferenca_significativa",
-    ])
-
-    candidatos_final_proximos = pd.DataFrame([modelo_final_escolhido])
-
-    print("\nMétricas finais:")
-    print(metricas_modelo_final)
-
-    print("\nResumo de validação cruzada operacional:")
-    print(pd.DataFrame([{
-        "MAE_cv": mae_cv,
-        "MAE_cv_desvio": mae_cv_desvio,
-        "RMSE_cv": rmse_cv,
-        "RMSE_cv_desvio": rmse_cv_desvio,
-        "R2_cv": r2_cv,
-        "R2_cv_desvio": r2_cv_desvio,
-    }]))
-
-    # 8. Artefato completo compatível com o app Streamlit.
-    artefato_modelo_final = {
-        "modelo_final": modelo_final,
-        "nome_modelo": nome_modelo,
-        "nome_conjunto": nome_conjunto,
-        "variaveis_modelo": variaveis_modelo,
-        "imputador": imputador,
-        "seletor_variancia": seletor_variancia,
-        "variaveis_originais_X": X.columns.tolist(),
-        "variaveis_pos_variancia": variaveis_pos_variancia,
-        "metricas_modelo_final": metricas_modelo_final,
-        "ranking_modelos_geral": ranking_modelos_geral,
-        "modelo_final_escolhido": modelo_final_escolhido,
-        "resumo_repeated": resumo_repeated,
-        "resultado_friedman": resultado_friedman,
-        "resultados_wilcoxon": resultados_wilcoxon,
-        "candidatos_final_proximos": candidatos_final_proximos,
-        "etapa_ensino": config_etapa["nome_etapa"],
-        "coluna_ideb": coluna_ideb,
-        "arquivo_base": arquivo_base,
-    }
-
-    joblib.dump(artefato_modelo_final, arquivo_saida)
-
-    print("\nArtefato salvo com sucesso:")
-    print(arquivo_saida)
+    if len(variaveis_modelo) != int(
+        config["n_variaveis_implantacao_esperado"]
+    ):
+        raise ValueError(
+            f"O arquivo variaveis_modelo.joblib contém "
+            f"{len(variaveis_modelo)} variáveis em {config['nome_etapa']}, "
+            f"mas o esperado para implantação é "
+            f"{config['n_variaveis_implantacao_esperado']}."
+        )
 
     return {
-        "etapa": config_etapa["nome_etapa"],
-        "arquivo_base": arquivo_base,
-        "arquivo_saida": arquivo_saida,
-        "modelo": nome_modelo,
-        "conjunto": nome_conjunto,
-        "n_variaveis": len(variaveis_modelo),
-        "MAE_teste": mae_teste,
-        "RMSE_teste": rmse_teste,
-        "R2_teste": r2_teste,
-        "RMSE_cv": rmse_cv,
-        "R2_cv": r2_cv,
+        "modelo": modelo,
+        "n_variaveis_avaliacao": n_avaliacao,
+        "n_variaveis_implantacao": len(variaveis_modelo),
+        "estrategia": obter_valor_metadado(
+            metadados,
+            "estrategia_selecao_descricao",
+            "estrategia_selecao",
+            "estrategia_selecao_codigo",
+        ),
     }
+
+
+def validar_base_referencia(
+    base: pd.DataFrame,
+    colunas_entrada: list[str],
+) -> None:
+    """Valida a base de referência de 2023."""
+    if base.empty:
+        raise ValueError(
+            "A base_referencia_2023.csv está vazia."
+        )
+
+    if "ano" in base.columns:
+        anos = (
+            pd.to_numeric(
+                base["ano"],
+                errors="coerce",
+            )
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        if anos and set(anos) != {2023}:
+            raise ValueError(
+                "A base de referência contém anos diferentes de 2023: "
+                f"{sorted(anos)}"
+            )
+
+    coluna_ideb = next(
+        (
+            coluna
+            for coluna in ["ideb", "IDEB", "Ideb"]
+            if coluna in base.columns
+        ),
+        None,
+    )
+
+    if coluna_ideb is None:
+        raise ValueError(
+            "A base de referência não contém a coluna do IDEB."
+        )
+
+    colunas_ausentes = [
+        coluna
+        for coluna in colunas_entrada
+        if coluna not in base.columns
+    ]
+
+    if colunas_ausentes:
+        raise ValueError(
+            "A base de referência não contém todas as colunas de entrada "
+            "do modelo:\n"
+            + "\n".join(f"- {coluna}" for coluna in colunas_ausentes)
+        )
+
+
+def preparar_entrada_implantacao(
+    dados: pd.DataFrame,
+    imputador: Any,
+    seletor_variancia: Any,
+    colunas_entrada: list[str],
+    variaveis_pos_variancia: list[str],
+    variaveis_modelo: list[str],
+) -> pd.DataFrame:
+    """
+    Reproduz o pré-processamento já definido no notebook final.
+
+    Não há qualquer novo ajuste de imputador ou seletor nesta função.
+    """
+    X_novo = (
+        dados[colunas_entrada]
+        .copy()
+        .apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+    )
+
+    X_imp = pd.DataFrame(
+        imputador.transform(
+            X_novo
+        ),
+        columns=colunas_entrada,
+        index=X_novo.index,
+    )
+
+    X_var = pd.DataFrame(
+        seletor_variancia.transform(
+            X_imp
+        ),
+        columns=variaveis_pos_variancia,
+        index=X_novo.index,
+    )
+
+    ausentes_pos_processamento = [
+        variavel
+        for variavel in variaveis_modelo
+        if variavel not in X_var.columns
+    ]
+
+    if ausentes_pos_processamento:
+        raise ValueError(
+            "Variáveis do modelo ausentes após o pré-processamento:\n"
+            + "\n".join(
+                f"- {variavel}"
+                for variavel in ausentes_pos_processamento
+            )
+        )
+
+    return X_var[
+        variaveis_modelo
+    ].copy()
+
+
+def testar_pipeline_implantacao(
+    pasta_origem: Path,
+) -> dict[str, Any]:
+    """Executa teste operacional de predição com até 20 registros."""
+    modelo = joblib.load(
+        pasta_origem
+        / "modelo_implantacao.joblib"
+    )
+
+    imputador = joblib.load(
+        pasta_origem
+        / "imputador_implantacao.joblib"
+    )
+
+    seletor_variancia = joblib.load(
+        pasta_origem
+        / "seletor_variancia_implantacao.joblib"
+    )
+
+    variaveis_pos_variancia = list(
+        joblib.load(
+            pasta_origem
+            / "variaveis_pos_variancia.joblib"
+        )
+    )
+
+    variaveis_modelo = list(
+        joblib.load(
+            pasta_origem
+            / "variaveis_modelo.joblib"
+        )
+    )
+
+    colunas_entrada = list(
+        joblib.load(
+            pasta_origem
+            / "colunas_entrada_modelo.joblib"
+        )
+    )
+
+    base = pd.read_csv(
+        pasta_origem
+        / ARQUIVO_BASE_REFERENCIA
+    )
+
+    validar_base_referencia(
+        base=base,
+        colunas_entrada=colunas_entrada,
+    )
+
+    n_teste = min(
+        20,
+        len(base),
+    )
+
+    dados_teste = base.iloc[
+        :n_teste
+    ].copy()
+
+    X_final = preparar_entrada_implantacao(
+        dados=dados_teste,
+        imputador=imputador,
+        seletor_variancia=seletor_variancia,
+        colunas_entrada=colunas_entrada,
+        variaveis_pos_variancia=variaveis_pos_variancia,
+        variaveis_modelo=variaveis_modelo,
+    )
+
+    predicoes = np.asarray(
+        modelo.predict(
+            X_final
+        )
+    ).ravel()
+
+    if predicoes.shape[0] != n_teste:
+        raise RuntimeError(
+            "O número de predições não corresponde ao número de registros testados."
+        )
+
+    if not np.all(
+        np.isfinite(
+            predicoes
+        )
+    ):
+        raise RuntimeError(
+            "O teste de implantação produziu predições não finitas."
+        )
+
+    suporte = pd.read_csv(
+        pasta_origem
+        / "suporte_empirico_variaveis.csv"
+    )
+
+    if "variavel" not in suporte.columns:
+        raise ValueError(
+            "suporte_empirico_variaveis.csv não contém a coluna 'variavel'."
+        )
+
+    variaveis_sem_suporte = [
+        variavel
+        for variavel in variaveis_modelo
+        if variavel
+        not in set(
+            suporte["variavel"].astype(str)
+        )
+    ]
+
+    if variaveis_sem_suporte:
+        raise ValueError(
+            "Há variáveis do modelo sem registro no suporte empírico:\n"
+            + "\n".join(
+                f"- {variavel}"
+                for variavel in variaveis_sem_suporte
+            )
+        )
+
+    return {
+        "n_registros_teste": n_teste,
+        "n_colunas_entrada": len(
+            colunas_entrada
+        ),
+        "n_variaveis_pos_variancia": len(
+            variaveis_pos_variancia
+        ),
+        "n_variaveis_modelo": len(
+            variaveis_modelo
+        ),
+        "predicao_min": float(
+            np.min(
+                predicoes
+            )
+        ),
+        "predicao_max": float(
+            np.max(
+                predicoes
+            )
+        ),
+    }
+
+
+def copiar_arquivo(
+    origem: Path,
+    destino: Path,
+) -> None:
+    """Copia arquivo preservando metadados básicos."""
+    destino.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    shutil.copy2(
+        origem,
+        destino,
+    )
+
+
+def integrar_etapa(
+    chave_etapa: str,
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Valida e instala os artefatos de uma etapa."""
+    print(
+        "\n"
+        + "=" * 78
+    )
+    print(
+        f"INTEGRANDO: {config['nome_etapa'].upper()}"
+    )
+    print(
+        "=" * 78
+    )
+
+    validar_arquivos_origem(
+        chave_etapa=chave_etapa,
+        config=config,
+    )
+
+    pasta_origem = config[
+        "pasta_origem"
+    ]
+
+    metadados = carregar_json(
+        pasta_origem
+        / "metadados.json"
+    )
+
+    variaveis_modelo = list(
+        joblib.load(
+            pasta_origem
+            / "variaveis_modelo.joblib"
+        )
+    )
+
+    info_metadados = validar_metadados(
+        config=config,
+        metadados=metadados,
+        variaveis_modelo=variaveis_modelo,
+    )
+
+    resultado_teste = testar_pipeline_implantacao(
+        pasta_origem=pasta_origem,
+    )
+
+    pasta_destino_modelo = config[
+        "pasta_destino_modelo"
+    ]
+
+    pasta_destino_modelo.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    manifesto = []
+
+    for nome_arquivo in ARQUIVOS_MODELO_SIMULADOR:
+        origem = (
+            pasta_origem
+            / nome_arquivo
+        )
+
+        destino = (
+            pasta_destino_modelo
+            / nome_arquivo
+        )
+
+        copiar_arquivo(
+            origem=origem,
+            destino=destino,
+        )
+
+        manifesto.append({
+            "etapa": chave_etapa,
+            "tipo": "modelo",
+            "arquivo": nome_arquivo,
+            "destino": str(
+                destino
+            ),
+            "sha256": calcular_sha256(
+                destino
+            ),
+        })
+
+    origem_base = (
+        pasta_origem
+        / ARQUIVO_BASE_REFERENCIA
+    )
+
+    destino_base = config[
+        "arquivo_destino_base"
+    ]
+
+    copiar_arquivo(
+        origem=origem_base,
+        destino=destino_base,
+    )
+
+    manifesto.append({
+        "etapa": chave_etapa,
+        "tipo": "base_referencia",
+        "arquivo": destino_base.name,
+        "destino": str(
+            destino_base
+        ),
+        "sha256": calcular_sha256(
+            destino_base
+        ),
+    })
+
+    resumo = {
+        "etapa": config[
+            "nome_etapa"
+        ],
+        "modelo": info_metadados[
+            "modelo"
+        ],
+        "estrategia": info_metadados[
+            "estrategia"
+        ],
+        "n_variaveis_avaliacao": info_metadados[
+            "n_variaveis_avaliacao"
+        ],
+        "n_variaveis_implantacao": resultado_teste[
+            "n_variaveis_modelo"
+        ],
+        "n_colunas_entrada": resultado_teste[
+            "n_colunas_entrada"
+        ],
+        "n_registros_teste_pipeline": resultado_teste[
+            "n_registros_teste"
+        ],
+        "teste_pipeline": "aprovado",
+        "pasta_modelo": str(
+            pasta_destino_modelo
+        ),
+        "base_referencia": str(
+            destino_base
+        ),
+    }
+
+    print(
+        "Modelo:",
+        resumo[
+            "modelo"
+        ],
+    )
+    print(
+        "Estratégia:",
+        resumo[
+            "estrategia"
+        ],
+    )
+    print(
+        "Variáveis de avaliação:",
+        resumo[
+            "n_variaveis_avaliacao"
+        ],
+    )
+    print(
+        "Variáveis de implantação:",
+        resumo[
+            "n_variaveis_implantacao"
+        ],
+    )
+    print(
+        "Teste operacional do pipeline: APROVADO"
+    )
+    print(
+        "Destino dos modelos:",
+        pasta_destino_modelo,
+    )
+    print(
+        "Base de referência:",
+        destino_base,
+    )
+
+    return (
+        resumo,
+        manifesto,
+    )
 
 
 # ============================================================
@@ -548,23 +725,87 @@ def treinar_e_salvar_artefato(chave_etapa: str, config_etapa: Dict[str, Any]) ->
 # ============================================================
 
 if __name__ == "__main__":
-    validar_configuracoes()
 
     resumos = []
+    manifesto_completo = []
 
-    for chave_etapa, config_etapa in CONFIG_ETAPAS.items():
-        resumo = treinar_e_salvar_artefato(chave_etapa, config_etapa)
-        resumos.append(resumo)
+    for (
+        chave_etapa,
+        config,
+    ) in CONFIG_ETAPAS.items():
 
-    resumo_execucao = pd.DataFrame(resumos)
-    caminho_resumo = os.path.join(
-        PASTA_OUTPUTS,
-        "resumo_artefatos_modelos_finais_por_etapa.xlsx",
+        (
+            resumo,
+            manifesto,
+        ) = integrar_etapa(
+            chave_etapa=chave_etapa,
+            config=config,
+        )
+
+        resumos.append(
+            resumo
+        )
+
+        manifesto_completo.extend(
+            manifesto
+        )
+
+    tabela_resumo = pd.DataFrame(
+        resumos
     )
-    resumo_execucao.to_excel(caminho_resumo, index=False)
 
-    print("\n" + "=" * 90)
-    print("PROCESSO CONCLUÍDO COM SUCESSO")
-    print("Resumo da execução salvo em:")
-    print(caminho_resumo)
-    print("=" * 90)
+    tabela_manifesto = pd.DataFrame(
+        manifesto_completo
+    )
+
+    arquivo_resumo = (
+        PASTA_OUTPUTS
+        / "resumo_integracao_simulador.csv"
+    )
+
+    arquivo_manifesto = (
+        PASTA_OUTPUTS
+        / "manifesto_artefatos_simulador.csv"
+    )
+
+    tabela_resumo.to_csv(
+        arquivo_resumo,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    tabela_manifesto.to_csv(
+        arquivo_manifesto,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    print(
+        "\n"
+        + "=" * 78
+    )
+    print(
+        "INTEGRAÇÃO CONCLUÍDA COM SUCESSO"
+    )
+    print(
+        "=" * 78
+    )
+    print(
+        "\nResumo:"
+    )
+    print(
+        tabela_resumo.to_string(
+            index=False
+        )
+    )
+    print(
+        "\nArquivos de auditoria:"
+    )
+    print(
+        "-",
+        arquivo_resumo,
+    )
+    print(
+        "-",
+        arquivo_manifesto,
+    )

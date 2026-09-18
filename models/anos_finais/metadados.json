@@ -1,0 +1,10 @@
+{
+    "etapa_ensino": "Anos Finais",
+    "modelo": "CatBoost",
+    "estrategia_selecao": "Frequencia_2_ou_mais",
+    "estrategia_selecao_descricao": "Frequência em dois ou mais métodos",
+    "n_variaveis_modelo_avaliacao": 21,
+    "n_variaveis_modelo_implantacao": 23,
+    "random_state": 42,
+    "observacao": "O modelo de avaliação foi definido e avaliado no pipeline metodológico completo. O modelo de implantação foi reconstruído com todos os dados disponíveis de 2013 a 2023, utilizando o conjunto de implantação já obtido na execução integral do notebook."
+}

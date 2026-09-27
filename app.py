@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from xgboost import XGBRegressor
 
 
 st.set_page_config(
@@ -15,23 +16,27 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-PASTA_DADOS = "data"
-PASTA_MODELOS = "models"
-PASTA_ASSETS = "assets"
+PASTA_RAIZ = os.path.dirname(os.path.abspath(__file__))
+PASTA_DADOS = os.path.join(PASTA_RAIZ, "data")
+PASTA_MODELOS = os.path.join(PASTA_RAIZ, "models")
+PASTA_ASSETS = os.path.join(PASTA_RAIZ, "assets")
 
 CONFIG_ETAPAS = {
     "Anos Iniciais": {
         "base": os.path.join(PASTA_DADOS, "base_referencia_2023_anos_iniciais.csv"),
         "pasta_modelo": os.path.join(PASTA_MODELOS, "anos_iniciais"),
+        "arquivo_modelo": "modelo_implantacao.ubj",
+        "tipo_modelo": "xgboost_nativo",
     },
     "Anos Finais": {
         "base": os.path.join(PASTA_DADOS, "base_referencia_2023_anos_finais.csv"),
         "pasta_modelo": os.path.join(PASTA_MODELOS, "anos_finais"),
+        "arquivo_modelo": "modelo_implantacao.joblib",
+        "tipo_modelo": "joblib",
     },
 }
 
-ARQUIVOS_MODELO = [
-    "modelo_implantacao.joblib",
+ARQUIVOS_MODELO_COMUNS = [
     "imputador_implantacao.joblib",
     "seletor_variancia_implantacao.joblib",
     "variaveis_pos_variancia.joblib",
@@ -114,7 +119,14 @@ def verificar_etapa(config):
     ausentes = []
     if not os.path.exists(config["base"]):
         ausentes.append(config["base"])
-    for arquivo in ARQUIVOS_MODELO:
+    arquivo_modelo = caminho(
+        config["pasta_modelo"],
+        config["arquivo_modelo"],
+    )
+    if not os.path.exists(arquivo_modelo):
+        ausentes.append(arquivo_modelo)
+
+    for arquivo in ARQUIVOS_MODELO_COMUNS:
         arq = caminho(config["pasta_modelo"], arquivo)
         if not os.path.exists(arq):
             ausentes.append(arq)
@@ -146,9 +158,28 @@ def carregar_joblib(caminho_arquivo):
 
 
 @st.cache_resource
-def carregar_artefatos(pasta_modelo):
+def carregar_modelo_implantacao(pasta_modelo, arquivo_modelo, tipo_modelo):
+    caminho_modelo = caminho(pasta_modelo, arquivo_modelo)
+
+    if tipo_modelo == "xgboost_nativo":
+        modelo = XGBRegressor()
+        modelo.load_model(caminho_modelo)
+        return modelo
+
+    if tipo_modelo == "joblib":
+        return carregar_joblib(caminho_modelo)
+
+    raise ValueError(f"Tipo de modelo não reconhecido: {tipo_modelo}")
+
+
+@st.cache_resource
+def carregar_artefatos(pasta_modelo, arquivo_modelo, tipo_modelo):
     return {
-        "modelo_implantacao": carregar_joblib(caminho(pasta_modelo, "modelo_implantacao.joblib")),
+        "modelo_implantacao": carregar_modelo_implantacao(
+            pasta_modelo,
+            arquivo_modelo,
+            tipo_modelo,
+        ),
         "imputador_implantacao": carregar_joblib(caminho(pasta_modelo, "imputador_implantacao.joblib")),
         "seletor_variancia_implantacao": carregar_joblib(caminho(pasta_modelo, "seletor_variancia_implantacao.joblib")),
         "variaveis_pos_variancia": carregar_joblib(caminho(pasta_modelo, "variaveis_pos_variancia.joblib")),
@@ -422,7 +453,11 @@ with aba_simulacao:
 
     config = ETAPAS[etapa]
     base_2023 = carregar_csv(config["base"])
-    artefatos = carregar_artefatos(config["pasta_modelo"])
+    artefatos = carregar_artefatos(
+        config["pasta_modelo"],
+        config["arquivo_modelo"],
+        config["tipo_modelo"],
+    )
     variaveis = list(artefatos["variaveis_modelo"])
     rotulos = construir_rotulos(artefatos)
 
@@ -689,7 +724,12 @@ with aba_metricas:
     etapa_m = st.selectbox(
         "Selecione a etapa de ensino", list(ETAPAS.keys()), key="etapa_metricas"
     )
-    art_m = carregar_artefatos(ETAPAS[etapa_m]["pasta_modelo"])
+    config_m = ETAPAS[etapa_m]
+    art_m = carregar_artefatos(
+        config_m["pasta_modelo"],
+        config_m["arquivo_modelo"],
+        config_m["tipo_modelo"],
+    )
 
     renderizar_cartoes(art_m)
     st.markdown("#### Avaliação preditiva")
@@ -714,7 +754,12 @@ with aba_metodologia:
     etapa_n = st.selectbox(
         "Selecione a etapa de ensino", list(ETAPAS.keys()), key="etapa_metodologia"
     )
-    art_n = carregar_artefatos(ETAPAS[etapa_n]["pasta_modelo"])
+    config_n = ETAPAS[etapa_n]
+    art_n = carregar_artefatos(
+        config_n["pasta_modelo"],
+        config_n["arquivo_modelo"],
+        config_n["tipo_modelo"],
+    )
     r = resumo_em_dict(art_n)
     m = art_n["metadados"]
 

@@ -68,15 +68,17 @@ from typing import Any
 import joblib
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 
 
 # ============================================================
 # CONFIGURAÇÕES GERAIS
 # ============================================================
 
-PASTA_DADOS = Path("data")
-PASTA_MODELOS = Path("models")
-PASTA_OUTPUTS = Path("outputs")
+RAIZ_PROJETO = Path(__file__).resolve().parent
+PASTA_DADOS = RAIZ_PROJETO / "data"
+PASTA_MODELOS = RAIZ_PROJETO / "models"
+PASTA_OUTPUTS = RAIZ_PROJETO / "outputs"
 
 PASTA_DADOS.mkdir(parents=True, exist_ok=True)
 PASTA_MODELOS.mkdir(parents=True, exist_ok=True)
@@ -86,7 +88,9 @@ PASTA_OUTPUTS.mkdir(parents=True, exist_ok=True)
 CONFIG_ETAPAS = {
     "anos_iniciais": {
         "nome_etapa": "Anos Iniciais",
-        "pasta_origem": Path("artefatos_anos_iniciais"),
+        "pasta_origem": RAIZ_PROJETO / "artefatos_anos_iniciais",
+        "arquivo_modelo": "modelo_implantacao.ubj",
+        "formato_modelo": "xgboost_nativo",
         "pasta_destino_modelo": PASTA_MODELOS / "anos_iniciais",
         "arquivo_destino_base": (
             PASTA_DADOS / "base_referencia_2023_anos_iniciais.csv"
@@ -97,7 +101,9 @@ CONFIG_ETAPAS = {
     },
     "anos_finais": {
         "nome_etapa": "Anos Finais",
-        "pasta_origem": Path("artefatos_anos_finais"),
+        "pasta_origem": RAIZ_PROJETO / "artefatos_anos_finais",
+        "arquivo_modelo": "modelo_implantacao.joblib",
+        "formato_modelo": "joblib",
         "pasta_destino_modelo": PASTA_MODELOS / "anos_finais",
         "arquivo_destino_base": (
             PASTA_DADOS / "base_referencia_2023_anos_finais.csv"
@@ -109,9 +115,8 @@ CONFIG_ETAPAS = {
 }
 
 
-# Arquivos realmente necessários para a aplicação Streamlit.
-ARQUIVOS_MODELO_SIMULADOR = [
-    "modelo_implantacao.joblib",
+# Arquivos comuns às duas etapas. O arquivo do modelo é definido em CONFIG_ETAPAS.
+ARQUIVOS_COMUNS_SIMULADOR = [
     "imputador_implantacao.joblib",
     "seletor_variancia_implantacao.joblib",
     "variaveis_pos_variancia.joblib",
@@ -174,7 +179,8 @@ def validar_arquivos_origem(
         )
 
     arquivos_necessarios = (
-        ARQUIVOS_MODELO_SIMULADOR
+        [config["arquivo_modelo"]]
+        + ARQUIVOS_COMUNS_SIMULADOR
         + [ARQUIVO_BASE_REFERENCIA]
     )
 
@@ -307,6 +313,13 @@ def validar_base_referencia(
             "A base de referência não contém a coluna do IDEB."
         )
 
+    if "ideb_predito_referencia" not in base.columns:
+        raise ValueError(
+            "A base de referência não contém a coluna "
+            "'ideb_predito_referencia', necessária para validar a "
+            "reprodução das predições exportadas pelo notebook."
+        )
+
     colunas_ausentes = [
         coluna
         for coluna in colunas_entrada
@@ -319,6 +332,27 @@ def validar_base_referencia(
             "do modelo:\n"
             + "\n".join(f"- {coluna}" for coluna in colunas_ausentes)
         )
+
+
+def carregar_modelo_implantacao(
+    pasta_modelo: Path,
+    config: dict[str, Any],
+) -> Any:
+    """Carrega o modelo de implantação no formato definido para cada etapa."""
+    caminho_modelo = pasta_modelo / config["arquivo_modelo"]
+
+    if config["formato_modelo"] == "xgboost_nativo":
+        modelo = xgb.XGBRegressor()
+        modelo.load_model(caminho_modelo)
+        return modelo
+
+    if config["formato_modelo"] == "joblib":
+        return joblib.load(caminho_modelo)
+
+    raise ValueError(
+        f"Formato de modelo não reconhecido em {config['nome_etapa']}: "
+        f"{config['formato_modelo']}"
+    )
 
 
 def preparar_entrada_implantacao(
@@ -381,47 +415,45 @@ def preparar_entrada_implantacao(
 
 def testar_pipeline_implantacao(
     pasta_origem: Path,
+    config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Executa teste operacional de predição com até 20 registros."""
-    modelo = joblib.load(
-        pasta_origem
-        / "modelo_implantacao.joblib"
+    """
+    Reproduz o pipeline de implantação e confere as predições contra a
+    referência exportada pelo notebook final.
+    """
+    modelo = carregar_modelo_implantacao(
+        pasta_modelo=pasta_origem,
+        config=config,
     )
 
     imputador = joblib.load(
-        pasta_origem
-        / "imputador_implantacao.joblib"
+        pasta_origem / "imputador_implantacao.joblib"
     )
 
     seletor_variancia = joblib.load(
-        pasta_origem
-        / "seletor_variancia_implantacao.joblib"
+        pasta_origem / "seletor_variancia_implantacao.joblib"
     )
 
     variaveis_pos_variancia = list(
         joblib.load(
-            pasta_origem
-            / "variaveis_pos_variancia.joblib"
+            pasta_origem / "variaveis_pos_variancia.joblib"
         )
     )
 
     variaveis_modelo = list(
         joblib.load(
-            pasta_origem
-            / "variaveis_modelo.joblib"
+            pasta_origem / "variaveis_modelo.joblib"
         )
     )
 
     colunas_entrada = list(
         joblib.load(
-            pasta_origem
-            / "colunas_entrada_modelo.joblib"
+            pasta_origem / "colunas_entrada_modelo.joblib"
         )
     )
 
     base = pd.read_csv(
-        pasta_origem
-        / ARQUIVO_BASE_REFERENCIA
+        pasta_origem / ARQUIVO_BASE_REFERENCIA
     )
 
     validar_base_referencia(
@@ -429,17 +461,8 @@ def testar_pipeline_implantacao(
         colunas_entrada=colunas_entrada,
     )
 
-    n_teste = min(
-        20,
-        len(base),
-    )
-
-    dados_teste = base.iloc[
-        :n_teste
-    ].copy()
-
     X_final = preparar_entrada_implantacao(
-        dados=dados_teste,
+        dados=base,
         imputador=imputador,
         seletor_variancia=seletor_variancia,
         colunas_entrada=colunas_entrada,
@@ -448,28 +471,52 @@ def testar_pipeline_implantacao(
     )
 
     predicoes = np.asarray(
-        modelo.predict(
-            X_final
-        )
+        modelo.predict(X_final)
     ).ravel()
 
-    if predicoes.shape[0] != n_teste:
+    if predicoes.shape[0] != len(base):
         raise RuntimeError(
-            "O número de predições não corresponde ao número de registros testados."
+            "O número de predições não corresponde ao número de registros "
+            "da base de referência."
         )
 
-    if not np.all(
-        np.isfinite(
-            predicoes
-        )
-    ):
+    if not np.all(np.isfinite(predicoes)):
         raise RuntimeError(
-            "O teste de implantação produziu predições não finitas."
+            "O pipeline de implantação produziu predições não finitas."
+        )
+
+    referencia = pd.to_numeric(
+        base["ideb_predito_referencia"],
+        errors="coerce",
+    ).to_numpy()
+
+    if not np.all(np.isfinite(referencia)):
+        raise ValueError(
+            "A coluna 'ideb_predito_referencia' contém valores ausentes "
+            "ou não finitos."
+        )
+
+    diferencas = np.abs(
+        predicoes - referencia
+    )
+
+    coincidem = np.allclose(
+        predicoes,
+        referencia,
+        rtol=1e-6,
+        atol=1e-6,
+        equal_nan=True,
+    )
+
+    if not coincidem:
+        raise RuntimeError(
+            f"As predições recalculadas para {config['nome_etapa']} não "
+            "reproduzem 'ideb_predito_referencia'. "
+            f"Diferença absoluta máxima: {float(np.max(diferencas)):.12g}."
         )
 
     suporte = pd.read_csv(
-        pasta_origem
-        / "suporte_empirico_variaveis.csv"
+        pasta_origem / "suporte_empirico_variaveis.csv"
     )
 
     if "variavel" not in suporte.columns:
@@ -480,8 +527,7 @@ def testar_pipeline_implantacao(
     variaveis_sem_suporte = [
         variavel
         for variavel in variaveis_modelo
-        if variavel
-        not in set(
+        if variavel not in set(
             suporte["variavel"].astype(str)
         )
     ]
@@ -496,27 +542,17 @@ def testar_pipeline_implantacao(
         )
 
     return {
-        "n_registros_teste": n_teste,
-        "n_colunas_entrada": len(
-            colunas_entrada
-        ),
-        "n_variaveis_pos_variancia": len(
-            variaveis_pos_variancia
-        ),
-        "n_variaveis_modelo": len(
-            variaveis_modelo
-        ),
-        "predicao_min": float(
-            np.min(
-                predicoes
-            )
-        ),
-        "predicao_max": float(
-            np.max(
-                predicoes
-            )
-        ),
+        "n_registros_validacao": int(len(base)),
+        "n_colunas_entrada": len(colunas_entrada),
+        "n_variaveis_pos_variancia": len(variaveis_pos_variancia),
+        "n_variaveis_modelo": len(variaveis_modelo),
+        "predicao_min": float(np.min(predicoes)),
+        "predicao_max": float(np.max(predicoes)),
+        "diferenca_referencia_max": float(np.max(diferencas)),
+        "diferenca_referencia_media": float(np.mean(diferencas)),
+        "predicoes_referencia_coincidem": True,
     }
+
 
 
 def copiar_arquivo(
@@ -580,6 +616,7 @@ def integrar_etapa(
 
     resultado_teste = testar_pipeline_implantacao(
         pasta_origem=pasta_origem,
+        config=config,
     )
 
     pasta_destino_modelo = config[
@@ -593,7 +630,12 @@ def integrar_etapa(
 
     manifesto = []
 
-    for nome_arquivo in ARQUIVOS_MODELO_SIMULADOR:
+    arquivos_modelo_etapa = (
+        [config["arquivo_modelo"]]
+        + ARQUIVOS_COMUNS_SIMULADOR
+    )
+
+    for nome_arquivo in arquivos_modelo_etapa:
         origem = (
             pasta_origem
             / nome_arquivo
@@ -666,8 +708,21 @@ def integrar_etapa(
         "n_colunas_entrada": resultado_teste[
             "n_colunas_entrada"
         ],
-        "n_registros_teste_pipeline": resultado_teste[
-            "n_registros_teste"
+        "arquivo_modelo_implantacao": config["arquivo_modelo"],
+        "formato_modelo_implantacao": config["formato_modelo"],
+        "n_registros_validacao_referencia": resultado_teste[
+            "n_registros_validacao"
+        ],
+        "predicao_min": resultado_teste["predicao_min"],
+        "predicao_max": resultado_teste["predicao_max"],
+        "diferenca_referencia_max": resultado_teste[
+            "diferenca_referencia_max"
+        ],
+        "diferenca_referencia_media": resultado_teste[
+            "diferenca_referencia_media"
+        ],
+        "predicoes_referencia_coincidem": resultado_teste[
+            "predicoes_referencia_coincidem"
         ],
         "teste_pipeline": "aprovado",
         "pasta_modelo": str(
@@ -703,7 +758,11 @@ def integrar_etapa(
         ],
     )
     print(
-        "Teste operacional do pipeline: APROVADO"
+        "Validação contra ideb_predito_referencia: APROVADA"
+    )
+    print(
+        "Diferença absoluta máxima:",
+        resultado_teste["diferenca_referencia_max"],
     )
     print(
         "Destino dos modelos:",

@@ -19,7 +19,8 @@ Este script executa uma verificação independente da instalação local:
 4. reproduz o pré-processamento de implantação;
 5. executa predições de teste;
 6. verifica se as predições são finitas;
-7. gera um resumo auditável em outputs/.
+7. compara as predições recalculadas com ideb_predito_referencia;
+8. gera um resumo auditável em outputs/.
 
 Estrutura esperada
 ------------------
@@ -29,7 +30,7 @@ data/
 
 models/
 ├── anos_iniciais/
-│   ├── modelo_implantacao.joblib
+│   ├── modelo_implantacao.ubj
 │   ├── imputador_implantacao.joblib
 │   ├── seletor_variancia_implantacao.joblib
 │   ├── variaveis_pos_variancia.joblib
@@ -39,7 +40,8 @@ models/
 │   ├── resumo_tecnico_modelo_final.csv
 │   └── suporte_empirico_variaveis.csv
 └── anos_finais/
-    └── mesmos arquivos
+    ├── modelo_implantacao.joblib
+    └── demais arquivos auxiliares equivalentes
 """
 
 from __future__ import annotations
@@ -51,15 +53,17 @@ from typing import Any
 import joblib
 import numpy as np
 import pandas as pd
+from xgboost import XGBRegressor
 
 
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
 
-PASTA_DADOS = Path("data")
-PASTA_MODELOS = Path("models")
-PASTA_OUTPUTS = Path("outputs")
+RAIZ_PROJETO = Path(__file__).resolve().parent
+PASTA_DADOS = RAIZ_PROJETO / "data"
+PASTA_MODELOS = RAIZ_PROJETO / "models"
+PASTA_OUTPUTS = RAIZ_PROJETO / "outputs"
 
 PASTA_OUTPUTS.mkdir(
     parents=True,
@@ -74,6 +78,8 @@ CONFIG_ETAPAS = {
         "modelo_esperado": "XGBoost",
         "n_variaveis_avaliacao_esperado": 30,
         "n_variaveis_implantacao_esperado": 30,
+        "arquivo_modelo": "modelo_implantacao.ubj",
+        "formato_modelo": "xgboost_nativo",
     },
     "anos_finais": {
         "nome_etapa": "Anos Finais",
@@ -82,11 +88,12 @@ CONFIG_ETAPAS = {
         "modelo_esperado": "CatBoost",
         "n_variaveis_avaliacao_esperado": 21,
         "n_variaveis_implantacao_esperado": 23,
+        "arquivo_modelo": "modelo_implantacao.joblib",
+        "formato_modelo": "joblib",
     },
 }
 
-ARQUIVOS_OBRIGATORIOS = [
-    "modelo_implantacao.joblib",
+ARQUIVOS_OBRIGATORIOS_COMUNS = [
     "imputador_implantacao.joblib",
     "seletor_variancia_implantacao.joblib",
     "variaveis_pos_variancia.joblib",
@@ -125,6 +132,32 @@ def primeiro_valor(
     return None
 
 
+def carregar_modelo_implantacao(
+    config: dict[str, Any],
+) -> Any:
+    """Carrega o modelo no formato apropriado para cada etapa."""
+    caminho_modelo = (
+        config["pasta_modelo"]
+        / config["arquivo_modelo"]
+    )
+
+    if config["formato_modelo"] == "xgboost_nativo":
+        modelo = XGBRegressor()
+        modelo.load_model(
+            caminho_modelo
+        )
+        return modelo
+
+    if config["formato_modelo"] == "joblib":
+        return joblib.load(
+            caminho_modelo
+        )
+
+    raise ValueError(
+        f"Formato de modelo não reconhecido: {config['formato_modelo']}"
+    )
+
+
 def validar_estrutura(
     config: dict[str, Any],
 ) -> None:
@@ -138,7 +171,19 @@ def validar_estrutura(
             )
         )
 
-    for arquivo in ARQUIVOS_OBRIGATORIOS:
+    arquivo_modelo = (
+        config["pasta_modelo"]
+        / config["arquivo_modelo"]
+    )
+
+    if not arquivo_modelo.exists():
+        ausentes.append(
+            str(
+                arquivo_modelo
+            )
+        )
+
+    for arquivo in ARQUIVOS_OBRIGATORIOS_COMUNS:
         caminho = (
             config["pasta_modelo"]
             / arquivo
@@ -310,6 +355,13 @@ def validar_base(
     if coluna_ideb is None:
         raise ValueError(
             "A base de referência não possui coluna do IDEB."
+        )
+
+    if "ideb_predito_referencia" not in base.columns:
+        raise ValueError(
+            "A base de referência não contém a coluna "
+            "'ideb_predito_referencia', necessária para validar a "
+            "reprodutibilidade das predições do modelo de implantação."
         )
 
     colunas_ausentes = [
@@ -559,9 +611,8 @@ def validar_etapa(
         "pasta_modelo"
     ]
 
-    modelo = joblib.load(
-        pasta_modelo
-        / "modelo_implantacao.joblib"
+    modelo = carregar_modelo_implantacao(
+        config
     )
 
     imputador = joblib.load(
@@ -674,6 +725,74 @@ def validar_etapa(
             "Foram produzidas predições não finitas."
         )
 
+    # Validação forte de reprodutibilidade: recalcula as predições para
+    # toda a base de 2023 e as compara com a coluna exportada pelo
+    # notebook final no mesmo momento em que os artefatos foram gerados.
+    X_referencia = preparar_entrada(
+        dados=base,
+        imputador=imputador,
+        seletor_variancia=seletor_variancia,
+        colunas_entrada=colunas_entrada,
+        variaveis_pos_variancia=variaveis_pos_variancia,
+        variaveis_modelo=variaveis_modelo,
+    )
+
+    predicoes_recalculadas = np.asarray(
+        modelo.predict(
+            X_referencia
+        )
+    ).ravel()
+
+    predicoes_referencia = pd.to_numeric(
+        base["ideb_predito_referencia"],
+        errors="coerce",
+    ).to_numpy()
+
+    mascara_referencia = np.isfinite(
+        predicoes_referencia
+    )
+
+    if not np.any(
+        mascara_referencia
+    ):
+        raise RuntimeError(
+            "A coluna 'ideb_predito_referencia' não possui valores numéricos válidos."
+        )
+
+    diferencas_referencia = np.abs(
+        predicoes_recalculadas[mascara_referencia]
+        - predicoes_referencia[mascara_referencia]
+    )
+
+    referencia_coincide = bool(
+        np.allclose(
+            predicoes_recalculadas[mascara_referencia],
+            predicoes_referencia[mascara_referencia],
+            rtol=1e-6,
+            atol=1e-6,
+            equal_nan=True,
+        )
+    )
+
+    diferenca_max_referencia = float(
+        np.max(
+            diferencas_referencia
+        )
+    )
+
+    diferenca_media_referencia = float(
+        np.mean(
+            diferencas_referencia
+        )
+    )
+
+    if not referencia_coincide:
+        raise RuntimeError(
+            "As predições recalculadas não reproduzem "
+            "'ideb_predito_referencia' dentro da tolerância definida. "
+            f"Diferença absoluta máxima: {diferenca_max_referencia:.10g}."
+        )
+
     metricas = extrair_metricas_resumo(
         resumo_tecnico
     )
@@ -718,6 +837,20 @@ def validar_etapa(
                 predicoes
             )
         ),
+        "arquivo_modelo_implantacao": config[
+            "arquivo_modelo"
+        ],
+        "formato_modelo_implantacao": config[
+            "formato_modelo"
+        ],
+        "n_registros_validacao_referencia": int(
+            np.sum(
+                mascara_referencia
+            )
+        ),
+        "predicoes_referencia_coincidem": referencia_coincide,
+        "diferenca_max_referencia": diferenca_max_referencia,
+        "diferenca_media_referencia": diferenca_media_referencia,
         **metricas,
     }
 
@@ -748,6 +881,18 @@ def validar_etapa(
     print(
         "Registros testados:",
         n_teste,
+    )
+    print(
+        "Validação contra ideb_predito_referencia:",
+        "APROVADA",
+    )
+    print(
+        "Diferença absoluta máxima:",
+        f"{diferenca_max_referencia:.10g}",
+    )
+    print(
+        "Diferença absoluta média:",
+        f"{diferenca_media_referencia:.10g}",
     )
     print(
         "Status: APROVADO"

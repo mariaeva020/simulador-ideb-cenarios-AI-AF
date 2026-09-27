@@ -2,7 +2,7 @@ streamlit==1.51.0
 pandas==2.3.3
 numpy==2.0.2
 scikit-learn==1.6.1
-xgboost
+xgboost==3.4.1
 catboost==1.2.8
 plotly==6.5.0
 joblib==1.5.2
